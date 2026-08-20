@@ -1,96 +1,137 @@
 # ChatGPT
 
-A clean-room, Linux-native agent workstation for giving AI systems **controlled, inspectable access** to computers, terminals, applications, and complex workflows.
+A clean-room, Linux-native agent workstation built around a **Rust authority core** and a **terminal human-control plane**.
 
 > **Independent community project.** Not affiliated with or endorsed by OpenAI. ChatGPT is a trademark of OpenAI.
 
 ## Mission
 
-Build a local agent runtime where intelligence and authority are deliberately separate:
+Give AI systems useful access to a computer without confusing intelligence with authority.
 
 ```text
-model proposes -> policy evaluates -> approval gates -> executor acts -> receipt records -> model observes
+model/provider -> proposes action
+                    |
+                    v
+             Rust authority core
+                    |
+              policy decision
+              /     |      \
+           deny  approve   allow
+                    |
+                    v
+             capability broker
+                    |
+                    v
+               host/sandbox
+                    |
+                    v
+                  receipt
+
+Human <---------- Ratatui TUI ----------> authority core
 ```
 
-The project begins with Linux and a small Python core. GUI automation, media workflows, browser control, and richer provider adapters come later, only after the authority and audit layers are trustworthy.
+The prime invariant is:
 
-## Design principles
+```text
+CAPABILITY != AUTHORITY
+```
 
-1. **Capability != authority.** A capable model does not automatically receive permission to act.
-2. **Default deny.** Unknown actions are rejected.
-3. **Observation before mutation.** Read-only capabilities are easier to grant than effectful ones.
-4. **Explicit approval for effects.** Shell execution, input injection, application launch, and writes require approval.
-5. **Receipts, not vibes.** Every evaluated action yields a canonical receipt.
-6. **Deterministic identities.** Action and receipt identities are hashes of canonical JSON payloads.
-7. **No hidden shell.** The first executor accepts argv arrays, not shell strings.
-8. **Fail closed.** Unsupported or malformed actions do not silently degrade into execution.
-9. **Clean-room implementation.** No source code is copied from third-party AI desktop wrappers.
-10. **Keep the core boring.** Small contracts and testable state transitions beat GUI spectacle.
+The model may reason about an action. Only the local runtime may authorize and execute it.
+
+## Why Rust + TUI
+
+This application sits between models and operating-system capabilities, eventually including API credentials, authenticated sessions, filesystem access, input injection, browser state, media tools, and long-running processes.
+
+Rust is the trusted implementation language because memory safety, strong types, ownership, and explicit state transitions are valuable properties at that boundary. A TUI keeps the human control plane small, inspectable, fast, SSH-friendly, and free of a heavyweight GUI stack.
+
+Rust memory safety is **not** secret erasure. The bootstrap therefore also uses zeroizing secret containers, redacted debug output, opaque credential handles, cleared subprocess environments, and a rule that raw secrets never enter action JSON, receipts, logs, or TUI state.
+
+Python remains welcome for scientific, media, automation, and generated worker tasks. It runs *behind* the Rust capability broker rather than guarding authority itself.
 
 ## Current bootstrap
 
-The first implementation skeleton provides:
+The Rust skeleton now includes:
 
-- typed action, approval, policy-decision, and receipt records;
-- canonical JSON hashing for action and receipt identity;
-- a default-deny policy engine;
-- hard rejection of a small set of obviously destructive shell invocations;
-- explicit approval binding to one exact action identity;
-- a shell executor that is **disabled by default**;
-- a runtime that records denied, approval-required, simulated, completed, failed, and unsupported outcomes;
-- JSON Schemas for actions, approvals, and receipts;
-- standard-library unit tests;
-- CI on supported Python versions.
+- immutable normalized actions with content-derived identities;
+- separate untrusted proposals and normalized executable actions;
+- a default-deny policy kernel;
+- exact action-bound approval records;
+- hard denial of unknown capabilities and obvious shell escapes/privilege escalation;
+- structured argv execution only, disabled unless `--execute` is supplied;
+- cleared child-process environment with a minimal fixed environment;
+- hashed output evidence instead of stdout/stderr persistence;
+- zeroization of captured subprocess output after evidence is derived;
+- opaque `cred:*` handles and an in-memory zeroizing secret store;
+- raw secret-shaped action fields rejected during normalization;
+- deterministic receipts without wall-clock data in their identity;
+- a Ratatui authority console with an emergency revoke state;
+- language-neutral JSON Schemas;
+- Rust unit/integration tests and CI with `fmt`, `clippy`, and `test`.
 
-This is intentionally **not yet** a desktop-control product. See `ROADMAP.md`.
+This is **not yet a production sandbox or autonomous desktop-control product**. See `ROADMAP.md`.
 
-## Quick start
+## Build and test
 
 ```bash
 git clone https://github.com/QSOLKCB/ChatGPT.git
 cd ChatGPT
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
-python -m unittest discover -s tests -v
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
 ```
 
-Inspect a proposed action without executing it:
+Launch the authority console:
 
 ```bash
-qsol-chatgpt policy '{"kind":"shell.exec","args":{"argv":["printf","hello\\n"]}}'
+cargo run -- tui
 ```
 
-Run through the full runtime in simulation mode:
+Inspect policy without executing anything:
 
 ```bash
-qsol-chatgpt run '{"kind":"shell.exec","args":{"argv":["printf","hello\\n"]}}' --approve
+cargo run -- policy \
+  '{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","hello\\n"]}}'
 ```
 
-Real command execution is opt-in:
+Simulate an approved action:
 
 ```bash
-qsol-chatgpt run '{"kind":"shell.exec","args":{"argv":["printf","hello\\n"]}}' --approve --execute
+cargo run -- run \
+  '{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","hello\\n"]}}' \
+  --approve
 ```
+
+Real host effects are deliberately opt-in during the bootstrap:
+
+```bash
+cargo run -- run \
+  '{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","hello\\n"]}}' \
+  --approve --execute
+```
+
+Do **not** use `--execute` with an untrusted model or privileged/production environment yet.
 
 ## Repository map
 
 ```text
-docs/                  architecture, threat model, computer-use contract, provenance
-schemas/               language-neutral machine contracts
-src/qsol_chatgpt/      first runtime implementation
-tests/                 contract and policy tests
-.github/workflows/     CI
-README4AI.md            machine-oriented project summary
-AGENTS.md               machine contributor rules
-ROADMAP.md              staged implementation plan
-SECURITY.md             security policy and invariants
-CONTRIBUTING.md         contribution and clean-room rules
+src/contracts.rs       proposal, action, approval and credential-handle contracts
+src/policy.rs          default-deny authority decisions
+src/runtime.rs         approval gate and execution lifecycle
+src/executor.rs        disabled-by-default structured command executor
+src/receipts.rs        deterministic, secret-free receipts
+src/secrets.rs         zeroizing in-memory secret primitives
+src/tui.rs             Ratatui human authority console
+schemas/               language-neutral contracts
+docs/                  architecture, threat model, computer-use and secret rules
+tests/                 cross-module contract tests
+README4AI.md            machine-oriented source map
+AGENTS.md               machine contributor invariants
+ROADMAP.md              authority-risk-ordered implementation plan
 ```
 
-## Safety boundary
+## Clean-room provenance
 
-The bootstrap policy is a **minimum safety floor, not a complete sandbox**. Do not expose the executor to untrusted models, secrets, privileged accounts, or production machines. Later phases must add OS-level isolation, scoped filesystem roots, network policy, credential brokers, desktop capability brokers, and stronger approval semantics before broad autonomous use.
+No source code from Noi, `lencx/ChatGPT`, or another desktop AI wrapper is used by this repository. General publicly known architectural concepts may be independently implemented. See `docs/PROVENANCE.md`.
 
 ## License
 

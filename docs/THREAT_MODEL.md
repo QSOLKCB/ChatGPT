@@ -2,87 +2,93 @@
 
 ## Assets
 
-The runtime may eventually gain access to:
+Protect:
+- user files and filesystem integrity;
+- API keys, OAuth/session credentials and cookies;
+- authenticated accounts;
+- shell/process authority;
+- desktop input authority;
+- browser state;
+- audit integrity;
+- approval meaning;
+- user attention and ability to revoke control.
 
-- user files;
-- desktop contents;
-- browser sessions;
-- terminals and processes;
-- network services;
-- creative applications;
-- credentials through brokers;
-- source repositories;
-- media and research data.
+## Adversaries / hostile inputs
 
-The policy kernel, approval records, and receipt history are themselves security assets.
+Assume any of the following may be malicious or compromised:
+- model output;
+- a provider response;
+- webpage/document text;
+- downloaded files;
+- repository contents;
+- clipboard data;
+- OCR/UI text;
+- worker-script output;
+- tool output;
+- prompt-injection content embedded in otherwise legitimate data.
 
-## Adversaries and failure sources
-
-### Malicious external content
-
-A webpage, file, repository, terminal output, subtitle, image, document, or UI element may contain instructions designed to redirect the agent.
-
-Rule: **observed content is data, not authority**.
-
-### Compromised or mistaken model
-
-The model may hallucinate state, misunderstand a task, choose a destructive command, or intentionally attempt escalation.
-
-Rule: model intent does not bypass policy.
+## Primary failure modes
 
 ### Confused deputy
+A model convinces the runtime to use authority the model itself does not possess.
 
-A legitimate capability may be used for a different purpose than the user authorized.
+Mitigation: capability broker, default deny, explicit approvals, scoped future credential broker.
 
-Mitigation direction: narrow action schemas, exact approval binding, capability roots, session budgets, and receipts.
+### Action substitution after approval
+An action changes after the human approved it.
+
+Mitigation: normalize before approval, immutable public action API, approval bound to content-derived `action_id`.
 
 ### Approval replay
+A previously approved action is reused in another session or later context.
 
-An old approval could be reused against a new action.
+Current state: exact action binding exists. Session/nonce/expiry binding is Phase 1 and remains required before autonomous operation.
 
-Bootstrap mitigation: approvals bind to the deterministic `action_id`. Future mitigation: session binding, expiry, nonce, and signature.
+### Secret injection into model-visible data
+Raw credentials appear in action arguments, receipts, logs, CLI text, or TUI state.
 
-### Shell injection
+Mitigation: opaque handles, secret-shaped key rejection, non-serializable secret store, redacted debug, explicit documentation/test requirements.
 
-Raw shell strings make authority boundaries ambiguous.
+### Secret residue in memory
+A key remains in freed/reused memory.
 
-Bootstrap mitigation: argv arrays, `shell=False`, default-disabled executor, policy inspection.
+Mitigation: zeroizing containers and minimized secret lifetime. Rust memory safety alone is explicitly not considered sufficient.
 
-### Receipt tampering
+### Ambient environment leakage
+A child command inherits `OPENAI_API_KEY`, SSH agent variables, cloud tokens, cookies or other host environment data.
 
-Audit records may be altered after execution.
+Mitigation: bootstrap executor calls `env_clear()` and supplies only a minimal fixed environment. Future credential injection is explicit and scoped.
 
-Bootstrap mitigation: content-addressed receipt IDs. Future mitigation: append-only chained storage and replay verification.
+### Output exfiltration through receipts
+A command prints credentials or private data and the audit log persists it.
 
-### Secret leakage
+Mitigation: receipts store SHA-256 and byte counts, not raw stdout/stderr; captured buffers are zeroized after evidence derivation.
 
-Secrets can leak through environment variables, stdout/stderr, screenshots, logs, browser pages, or generated receipts.
+### Shell escape
+Structured argv is converted back into unrestricted shell text.
 
-Bootstrap rule: do not intentionally capture or persist secrets. Future work requires redaction, opaque secret handles, and brokered credentials.
+Mitigation: no raw shell-string contract; shell interpreter `-c` is denied in bootstrap policy; no `shell=true` equivalent.
 
-### GUI ambiguity
+### Privilege escalation
+The agent invokes sudo/doas/su or privileged helpers.
 
-A screenshot can be stale, controls can move, focus can change, and visual interpretation can be wrong.
+Mitigation: common escalation commands are denied now; OS-level sandbox and privilege boundary are still required.
 
-Future mitigation: observation/action sequence numbers, geometry receipts, application identity, accessibility APIs where possible, and re-observation after effects.
+### Network-policy bypass
+A shell program opens arbitrary sockets even though network authority was not intended.
 
-### Runaway autonomy
+Current state: not solved comprehensively by command-name filtering. Real untrusted execution is forbidden until network namespace/policy enforcement lands in Phase 1.
 
-A long-running agent may repeat actions, consume resources, or compound an early error.
+### TUI spoof/confusion
+Model-controlled text tricks the human into granting unrelated authority.
 
-Future mitigation: action budgets, wall-clock budgets, repeated-action suppression, checkpoints, revocation, and emergency stop.
+Mitigation target: render normalized action fields from trusted structures, visually separate untrusted content, exact action identity, explicit risk/capability labels, no model-controlled keybindings.
 
-## Trust boundaries
+### Kill-switch failure
+The user requests revoke-all but running processes/effectors continue.
 
-```text
-UNTRUSTED: model text, web content, files, UI text, OCR, tool output
-BOUNDARY:  parser -> schema -> policy -> approval verifier
-TRUSTED TCB: minimal policy kernel + executor broker + receipt writer
-EFFECT DOMAIN: host OS / sandbox / network / applications
-```
+Current state: bootstrap TUI displays revocation state only. Phase 1 requires runtime-authoritative revoke-all and process-tree termination before autonomous loops.
 
-Keep the trusted computing base small.
+## Security posture
 
-## Bootstrap limitations
-
-The destructive-command filter is deliberately described as a **floor**, not a complete command security system. It catches a few obvious catastrophic forms but cannot reason about arbitrary programs. Real safety must come from OS isolation and narrow capability executors, not an ever-growing blacklist.
+The bootstrap demonstrates the authority model. It does not claim containment. Until the roadmap gates pass, `--execute` is a local developer tool only.

@@ -1,46 +1,53 @@
 # Security Policy
 
-This project is security-sensitive by design. Treat all authority expansion as potentially dangerous even when the feature appears convenient.
+This project is security-sensitive because its purpose is to mediate AI access to a real operating system.
 
 ## Current status
 
-The bootstrap is a development skeleton, not a hardened sandbox. Real shell execution is disabled by default. Do not run untrusted agents with `--execute` on sensitive hosts.
+The repository is an early bootstrap, not a production sandbox. Do not attach untrusted autonomous models to `--execute`, privileged accounts, production machines, financial accounts, or valuable credentials.
 
-## Core security invariants
+## Core invariants
 
-- Default deny for unknown capabilities.
-- Effectful actions require approval.
-- Approval binds to one exact action ID.
-- Structured argv only for shell execution.
-- No implicit network, secret, root, or filesystem authority.
-- Every evaluated action produces a receipt.
-- Unsupported actions do not silently execute through another path.
-- Model-visible content is untrusted and may contain prompt injection.
+- capability is not authority;
+- default deny;
+- exact action-bound approval;
+- immutable normalized actions through the public API;
+- no `unsafe` Rust in the trusted core;
+- no raw secret values in machine-visible contracts;
+- no inherited host environment in child processes;
+- no raw command-string shell contract;
+- no model-direct OS executor access;
+- deterministic, secret-free receipts;
+- explicit human revocation path.
 
-## Threat classes
+## Secrets
 
-The threat model includes:
+Rust memory safety prevents broad classes of memory corruption but does not guarantee that secret bytes disappear immediately after use. Secret material therefore requires explicit lifetime control and zeroization.
 
-- malicious or compromised model output;
-- prompt injection from webpages, documents, terminals, UI text, images, and clipboard data;
-- confused-deputy behaviour;
-- approval spoofing or replay;
-- command/argument injection;
-- capability escalation;
-- secret leakage through logs or screenshots;
-- unintended filesystem mutation;
-- uncontrolled network effects;
-- GUI state ambiguity;
-- stale observations;
-- infinite or runaway agent loops;
-- receipt tampering.
+The bootstrap:
+- stores secret values in `Zeroizing<String>` wrappers;
+- redacts secret `Debug` output;
+- represents credentials in contracts with opaque `cred:*` handles;
+- rejects common raw-secret-shaped argument keys during action normalization;
+- refuses credential injection into shell commands;
+- clears subprocess environment inheritance;
+- stores only hashes and sizes of stdout/stderr in receipts and zeroizes captured buffers afterward.
 
-See `docs/THREAT_MODEL.md` for the detailed model.
+See `docs/SECRETS.md`.
 
-## Reporting
+## Reporting vulnerabilities
 
-Please report security issues privately to the repository maintainers rather than publishing exploit details in a public issue before a fix is available.
+Please report vulnerabilities privately through GitHub's security reporting facilities when available. Avoid publishing live credentials, exploit transcripts against third-party systems, or sensitive host data in a public issue.
 
-## Security-development rule
-
-A convenience feature is not accepted as a reason to bypass the policy kernel. If a capability cannot be represented, scoped, approved, executed, and receipted cleanly, it is not ready to ship.
+Useful reports include:
+- authority bypass;
+- approval replay/substitution;
+- action identity mismatch;
+- secret leakage;
+- output/log leakage;
+- executor escape;
+- unsafe path handling;
+- prompt-injection boundary failure;
+- TUI state/approval confusion;
+- sandbox breakout;
+- network-policy bypass.

@@ -1,37 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/QSOLKCB/ChatGPT/schemas/action.schema.json",
-  "title": "QSOL ChatGPT Action",
+  "title": "QSOL ChatGPT Normalized Action",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "action_id", "kind", "args", "requested_by"],
+  "required": ["schema_version", "action_id", "kind", "args", "requested_by", "credential_handles"],
   "properties": {
-    "schema_version": {"const": "qsol-chatgpt-action/1"},
+    "schema_version": {"const": "qsol-chatgpt-action/2"},
     "action_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "kind": {"type": "string", "minLength": 1},
+    "kind": {"type": "string", "minLength": 1, "maxLength": 128},
     "args": {"type": "object"},
-    "requested_by": {"type": "string", "minLength": 1}
-  },
-  "allOf": [
-    {
-      "if": {"properties": {"kind": {"const": "shell.exec"}}, "required": ["kind"]},
-      "then": {
-        "properties": {
-          "args": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["argv"],
-            "properties": {
-              "argv": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 256,
-                "items": {"type": "string", "maxLength": 16384}
-              }
-            }
-          }
-        }
-      }
+    "requested_by": {"type": "string", "minLength": 1, "maxLength": 256},
+    "credential_handles": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^cred:[A-Za-z0-9._:-]+$"}
     }
-  ]
+  }
 }

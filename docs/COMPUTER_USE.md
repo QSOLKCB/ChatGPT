@@ -1,53 +1,27 @@
-# Computer-Use Contract
+# Computer Use Contract
 
-Computer use is modeled as a sequence of explicit capabilities rather than unrestricted desktop possession.
+Computer use is a future capability layer on top of the Rust authority core, not a direct model-to-desktop API.
 
-## Intended loop
-
-```text
-observe -> propose -> validate -> authorize -> execute -> receipt -> observe again
-```
-
-## Observation capabilities
-
-Planned examples:
-
-- capture screen;
-- enumerate windows;
-- inspect active application identity;
-- read bounded filesystem content;
-- inspect media metadata.
-
-Observation is not automatically harmless. Screenshots and file reads may expose secrets, so future policy profiles must scope them.
-
-## Effect capabilities
-
-Planned examples:
-
-- click at validated geometry;
-- type text;
-- send bounded key chords;
-- launch an allowlisted application;
-- execute structured command argv;
-- write within a scoped filesystem root.
-
-## Preferred-control rule
-
-Use the most structured and deterministic interface available:
+## Loop
 
 ```text
-native API / file format
-        > dedicated CLI
-        > accessibility / automation API
-        > GUI coordinate control
+capture -> hash/redact -> model observes -> model proposes semantic action
+        -> Rust policy -> human approval when required -> OS broker executes
+        -> receipt -> next observation
 ```
 
-For media work, prefer FFmpeg/FFprobe and deterministic project files before pixel-level timeline manipulation.
+## Rules
 
-## No direct model-to-OS path
+- Wayland-first observation/control boundaries where practical.
+- Screen capture and input injection are separate capabilities.
+- The model never receives a raw OS input handle.
+- Coordinates, target geometry, active window and application identity become part of effect receipts where relevant.
+- Sensitive UI classes require stronger confirmation.
+- Action/rate budgets are enforced locally.
+- Emergency revoke-all is local and provider-independent.
+- Prompt text visible on the desktop is untrusted input.
+- Prefer deterministic API/CLI operations over pixel interaction when they provide a narrower authority surface.
 
-A provider adapter MUST NOT expose unrestricted mouse, keyboard, process, filesystem, network, or credential APIs directly to model output. Every effect crosses the policy and receipt boundary.
+## Media implication
 
-## Stale-state rule
-
-After a meaningful effect, re-observe before assuming success. A successful API call is not proof that the intended semantic state now exists.
+For video/audio workflows, FFmpeg/FFprobe adapters should handle deterministic operations first. Kdenlive/Blender GUI control is used where visual editing is genuinely necessary, always through the same broker and approval model.

@@ -4,65 +4,76 @@ MACHINE-ORIENTED CONTRIBUTOR INSTRUCTIONS.
 
 ## Mission
 
-Maintain a small, auditable, clean-room Linux agent runtime where models propose actions and the runtime controls authority.
+Maintain a small, auditable Rust authority core for a Linux-native AI workstation. Models propose. Rust decides authority. Humans retain revocation.
 
 ## Non-negotiable invariants
 
-1. Never grant execution merely because a model requested it.
-2. Unknown action kinds are denied.
+1. `CAPABILITY != AUTHORITY`.
+2. Unknown capabilities fail closed.
 3. Effectful actions require explicit authority.
-4. Approval records bind to exact action identities.
-5. Every evaluated action returns a receipt.
-6. No `shell=True` in the bootstrap runtime.
-7. Shell actions use argv arrays.
-8. Executor defaults remain non-executing unless a roadmap phase explicitly changes the contract.
-9. Do not log secrets, environment dumps, tokens, cookies, credentials, or private key material.
-10. Do not weaken tests to make unsafe behaviour pass.
+4. Approval binds to one exact normalized `action_id`.
+5. The public `Action` API must not expose mutable action internals after identity calculation.
+6. `unsafe` Rust is forbidden in the trusted core.
+7. Raw secrets never enter proposals, actions, approvals, receipts, logs, TUI state, or inherited subprocess environments.
+8. Credential references are opaque handles, never secret values.
+9. Secret values use explicit zeroizing storage; memory safety is not treated as secret erasure.
+10. Provider adapters never call OS executors directly.
+11. The model never talks directly to OS input APIs.
+12. Shell execution uses argv arrays, never an implicit shell string.
+13. Shell interpreter `-c` escape paths remain denied unless a future reviewed capability explicitly defines them.
+14. Real execution remains opt-in until sandbox gates in `ROADMAP.md` are satisfied.
+15. Do not weaken negative tests to make a capability pass.
+
+## Language boundary
+
+Rust owns:
+- contracts;
+- policy;
+- approvals;
+- credential broker;
+- capability dispatch;
+- receipts/audit;
+- process supervision;
+- TUI authority state.
+
+Python or other languages may implement workers for media, science, automation, data analysis, or generated tasks. Workers receive only brokered capabilities and scoped inputs.
 
 ## Clean-room provenance
 
-This repository is an independent implementation. Do not copy or port code from Noi, lencx/ChatGPT, or other desktop AI wrappers. Do not paste source snippets from unlicensed or incompatibly licensed projects. Architectural concepts may be independently implemented.
+Do not copy or port source from Noi, `lencx/ChatGPT`, or other desktop AI wrappers. Do not translate unlicensed source code into Rust. General architecture, standards, documented OS APIs, and independently designed interfaces are allowed.
 
-When introducing a dependency:
+## Dependency discipline
 
-- verify its license;
-- document why it is required;
-- prefer standard-library or narrow dependencies for the authority core;
-- keep provider/UI integrations outside the policy kernel.
+Before adding a dependency:
+- verify its license is compatible;
+- state why the standard library/current dependency set is insufficient;
+- keep provider, UI, media, and browser dependencies outside the policy kernel where possible;
+- avoid dependencies that require `unsafe` in this repository's own code path without an explicit security review.
 
-## Change discipline
+## Required checks
 
-For changes to action semantics, update together:
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
+```
 
-- `schemas/`;
-- Python data model;
-- policy rules;
-- tests;
-- `README4AI.md` when machine behaviour changes.
-
-For new executors, add negative tests for denied and unapproved paths before happy-path execution tests.
+Tests must not require network access, real credentials, desktop injection, or privileged host mutation.
 
 ## Security review triggers
 
-Require explicit review when a change adds or broadens:
-
-- shell execution;
-- filesystem writes;
+Require explicit security review for changes that add or broaden:
+- shell/process execution;
+- filesystem writes/deletes;
 - network access;
-- credential access;
+- credential exposure/injection;
+- browser sessions/cookies;
 - clipboard access;
-- browser sessions;
-- input injection;
 - desktop capture;
+- keyboard/mouse injection;
 - background persistence;
 - privilege changes;
 - autonomous loops;
-- remote control.
-
-## Test command
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-The test suite must pass without network access and without executing real host mutations.
+- remote control;
+- approval scope/reuse;
+- receipt redaction rules.

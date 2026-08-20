@@ -6,9 +6,9 @@
   "additionalProperties": false,
   "required": ["schema_version", "action_id", "approved", "approved_by"],
   "properties": {
-    "schema_version": {"const": "qsol-chatgpt-approval/1"},
+    "schema_version": {"const": "qsol-chatgpt-approval/2"},
     "action_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "approved": {"type": "boolean"},
-    "approved_by": {"type": "string", "minLength": 1}
+    "approved": {"const": true},
+    "approved_by": {"type": "string", "minLength": 1, "maxLength": 256}
   }
 }

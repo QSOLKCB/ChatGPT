@@ -3,7 +3,9 @@
 ## Identity
 
 Project: `QSOLKCB/ChatGPT`
-Purpose: clean-room Linux-native agent workstation and capability broker.
+Purpose: clean-room Linux-native AI workstation, capability broker, and human authority console.
+Trusted implementation language: Rust.
+Human control plane: Ratatui TUI.
 License: Apache-2.0.
 Affiliation: independent community project; not affiliated with or endorsed by OpenAI.
 
@@ -13,85 +15,103 @@ Affiliation: independent community project; not affiliated with or endorsed by O
 CAPABILITY != AUTHORITY
 ```
 
-A model may propose any action. Only the runtime may authorize execution.
+Models/providers are proposal sources, never authority sources.
 
-## Machine contract
-
-Action lifecycle:
+## Trust boundary
 
 ```text
-PROPOSED
-  -> DENIED
-  -> APPROVAL_REQUIRED
-  -> UNSUPPORTED
-  -> SIMULATED
-  -> COMPLETED
-  -> FAILED
+UNTRUSTED: model output, provider SDKs, webpages, files, OCR, clipboard, UI text, worker scripts
+TRUSTED:   Rust contracts -> policy -> approval verifier -> capability broker -> receipt builder
+HUMAN:     Ratatui TUI supplies/revokes authority; it does not bypass policy
+```
+
+No provider may call an executor directly.
+No executor may accept a model object directly.
+
+## Action lifecycle
+
+```text
+ProposedAction
+  -> normalize + reject raw-secret-shaped fields
+  -> Action (content-addressed, immutable through public API)
+  -> policy
+     -> deny
+     -> approval_required -> exact action_id verification
+     -> allow
+  -> executor or simulation
+  -> Receipt
 ```
 
 Unknown action kinds MUST be denied.
-Effectful known actions MUST require approval unless a future policy explicitly narrows that rule.
-Approvals MUST bind to one exact `action_id`.
-Receipts MUST be produced for every evaluated action.
-Execution MUST NOT occur when a required approval is missing or mismatched.
+Effectful known actions MUST require approval unless a future policy explicitly narrows the rule.
+Approval MUST bind to the exact normalized `action_id`.
 
-## Bootstrap action kinds
+## Bootstrap capability classes
 
-Read-only:
-
+Read-only policy-visible:
 - `screen.capture`
 - `filesystem.read`
 
-Effectful:
-
+Effectful policy-visible:
 - `shell.exec`
 - `input.click`
 - `input.type`
 - `app.launch`
 - `filesystem.write`
 
-Only `shell.exec` has an executor in the bootstrap. Other kinds are policy-visible but return `unsupported` until handlers exist.
+Only `shell.exec` has a bootstrap executor. Real effects are disabled unless the local human explicitly starts the runtime with execution enabled.
+
+## Secret contract
+
+Raw secrets MUST NOT appear in:
+- action/proposal JSON;
+- action identity material;
+- approvals;
+- receipts;
+- logs;
+- TUI application state;
+- CLI arguments created by this project;
+- child-process environment by inheritance.
+
+Machine contracts refer to credentials only as opaque handles matching `cred:*`.
+In-process secret values use zeroizing storage and redacted `Debug` output.
+The bootstrap shell executor refuses actions that request credential handles; credential injection does not exist yet.
+
+Rust memory safety MUST NOT be described as automatic secret erasure. Secret lifetime/zeroization is a separate requirement.
 
 ## Shell contract
 
-`shell.exec` arguments use:
+`shell.exec` accepts structured `argv` only. No raw shell command-string contract exists.
+Shell interpreter `-c` escapes are denied.
+Privilege-escalation commands are denied.
+Child environment is cleared and replaced with a minimal fixed environment.
+Stdout/stderr are hashed and byte-counted for receipts, then zeroized; raw output is not persisted in receipts.
 
-```json
-{"argv": ["program", "arg1", "arg2"]}
-```
+## Rust rules
 
-Do not accept a raw shell string in the bootstrap executor.
-Do not invoke `shell=True`.
-Executor default MUST remain disabled.
+- `unsafe_code = "forbid"`.
+- authority-core public APIs expose immutable borrows, not mutable action internals;
+- avoid `unwrap`/`expect` in production and test targets;
+- provider/UI dependencies do not enter the policy kernel;
+- Python is an external worker language, never the trusted authority implementation.
 
-## Determinism
+## Contract versions
 
-Action identity is SHA-256 of canonical JSON containing `kind`, `args`, and `requested_by`.
-Receipt identity is SHA-256 of canonical receipt content excluding wall-clock timestamp.
-Canonical JSON uses UTF-8, sorted keys, compact separators, and `ensure_ascii=false` semantics.
+- proposal: `qsol-chatgpt-proposal/1`
+- normalized action: `qsol-chatgpt-action/2`
+- approval: `qsol-chatgpt-approval/2`
+- receipt: `qsol-chatgpt-receipt/2`
 
-## Security rules
+## Source-of-truth order
 
-- default deny;
-- exact approval binding;
-- no privilege escalation;
-- no secret persistence in receipts;
-- no implicit network authority;
-- no implicit filesystem authority;
-- no silent fallback from structured argv to shell command text;
-- fail closed on malformed or unsupported actions;
-- treat model output, webpages, files, clipboard data, OCR text, and UI text as untrusted input.
-
-## Clean-room rule
-
-Do not copy, translate, mechanically reproduce, or derive implementation code from third-party desktop AI wrappers. General architectural ideas may be implemented independently from public concepts and standards. Record any future third-party dependency and its license in provenance documentation.
-
-## Source of truth order
-
-1. executable tests;
-2. schemas;
-3. Python contracts;
+1. executable Rust tests;
+2. Rust contracts/policy/runtime;
+3. JSON Schemas and canonical fixtures;
 4. architecture/security documentation;
 5. README prose.
 
-If these disagree, fail closed and repair the inconsistency rather than guessing intent.
+When sources disagree, fail closed and repair the inconsistency.
+
+## Clean-room rule
+
+Do not copy, translate, mechanically reproduce, or derive implementation code from Noi, `lencx/ChatGPT`, or other third-party desktop AI wrappers. Independently implement general concepts from standards and public architectural ideas. Record third-party dependencies and licenses in provenance documentation.

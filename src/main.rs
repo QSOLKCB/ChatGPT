@@ -3,7 +3,6 @@ use std::io::{self, IsTerminal, Read};
 
 use clap::{Parser, Subcommand};
 use qsol_chatgpt::contracts::{Action, Approval, ProposedAction};
-use qsol_chatgpt::instance::AuthorityInstanceGuard;
 use qsol_chatgpt::obs::ObsConnectionConfig;
 use qsol_chatgpt::policy::Disposition;
 use qsol_chatgpt::secrets::{SecretStore, SecretValue};
@@ -52,18 +51,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         } => {
             let action = parse_action(&action)?;
             let approval = approve.then(|| Approval::allow_once(&action, "local-human"));
-            let _authority_instance = if needs_authority_instance(&action, execute) {
-                Some(AuthorityInstanceGuard::acquire()?)
-            } else {
-                None
-            };
-            let runtime = if needs_obs_runtime(&action, execute) {
-                let (config, secrets) = obs_runtime_config(&action, obs_password_stdin)?;
-                Runtime::effectful_with_obs(config, secrets)
-            } else if execute {
-                Runtime::effectful()
-            } else {
+            let decision = policy::evaluate(&action);
+            let runtime = if !execute || decision.disposition == Disposition::Deny {
                 Runtime::simulated()
+            } else if needs_obs_runtime(&action, execute) {
+                let (config, secrets) = obs_runtime_config(&action, obs_password_stdin)?;
+                Runtime::effectful_with_obs(config, secrets)?
+            } else {
+                Runtime::effectful()?
             };
             let receipt = runtime.run(&action, approval.as_ref())?;
             println!("{}", serde_json::to_string_pretty(&receipt)?);
@@ -75,10 +70,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn parse_action(json: &str) -> Result<Action, Box<dyn Error>> {
     let proposal: ProposedAction = serde_json::from_str(json)?;
     Ok(proposal.normalize()?)
-}
-
-fn needs_authority_instance(action: &Action, execute: bool) -> bool {
-    execute && policy::evaluate(action).disposition != Disposition::Deny
 }
 
 fn needs_obs_runtime(action: &Action, execute: bool) -> bool {
@@ -166,19 +157,6 @@ mod tests {
             Ok(value) => value,
             Err(error) => panic!("fixture action failed: {error}"),
         }
-    }
-
-    #[test]
-    fn denied_actions_do_not_claim_the_authority_instance() {
-        let denied = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.stream.start","args":{"obs_port":4455}}"#,
-        );
-        assert!(!needs_authority_instance(&denied, true));
-
-        let effectful = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","hello"]}}"#,
-        );
-        assert!(needs_authority_instance(&effectful, true));
     }
 
     #[test]

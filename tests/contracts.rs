@@ -3,11 +3,9 @@ use std::path::Path;
 
 use qsol_chatgpt::contracts::{Approval, ProposedAction};
 use qsol_chatgpt::policy::Disposition;
-use qsol_chatgpt::receipts::{
-    DesktopEvidence, ObsEvidence, ObsObservation, Receipt, ReceiptStatus,
-};
+use qsol_chatgpt::receipts::{ObsEvidence, ObsObservation, Receipt, ReceiptStatus};
 use qsol_chatgpt::runtime::Runtime;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 fn read_schema(name: &str) -> Value {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -114,35 +112,69 @@ fn published_receipt_schema_accepts_representative_obs_v3_shape() {
         Some("qsol-chatgpt-receipt/3")
     );
     assert_declared_object_shape(&serialized, v3);
+
+    let obs_evidence = match serialized.get("obs_evidence") {
+        Some(value) => value,
+        None => panic!("representative OBS receipt must contain obs_evidence"),
+    };
+    let obs_evidence_schema = match v3
+        .get("properties")
+        .and_then(|value| value.get("obs_evidence"))
+    {
+        Some(value) => value,
+        None => panic!("v3 schema must declare obs_evidence"),
+    };
+    assert_declared_object_shape(obs_evidence, obs_evidence_schema);
+
+    let observation = match obs_evidence.get("observation") {
+        Some(value) => value,
+        None => panic!("representative OBS evidence must contain observation"),
+    };
+    let observation_type = match observation.get("observation_type").and_then(Value::as_str) {
+        Some(value) => value,
+        None => panic!("representative observation must contain observation_type"),
+    };
+    let observation_branches = match obs_evidence_schema
+        .get("properties")
+        .and_then(|value| value.get("observation"))
+        .and_then(|value| value.get("oneOf"))
+        .and_then(Value::as_array)
+    {
+        Some(value) => value,
+        None => panic!("v3 schema must publish typed observation branches"),
+    };
+    let matching_branch = observation_branches.iter().find(|branch| {
+        branch
+            .get("properties")
+            .and_then(|value| value.get("observation_type"))
+            .and_then(|value| value.get("const"))
+            .and_then(Value::as_str)
+            == Some(observation_type)
+    });
+    match matching_branch {
+        Some(branch) => assert_declared_object_shape(observation, branch),
+        None => panic!("representative observation type is not published by the v3 schema"),
+    }
 }
 
 #[test]
 fn published_receipt_schema_accepts_representative_desktop_v4_shape() {
-    let action = action(
-        r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.capture"}"#,
-    );
-    let evidence = DesktopEvidence {
-        backend: "xdg_desktop_portal_screenshot".to_owned(),
-        image_sha256: "c".repeat(64),
-        image_bytes: 4096,
-        width: 1920,
-        height: 1080,
-        image_format: "png".to_owned(),
-    };
-    let receipt = match Receipt::new_desktop(
-        &action,
-        Disposition::Allow,
-        ReceiptStatus::Completed,
-        Some(evidence),
-        None,
-    ) {
-        Ok(value) => value,
-        Err(error) => panic!("desktop receipt construction failed: {error}"),
-    };
-    let serialized = match serde_json::to_value(&receipt) {
-        Ok(value) => value,
-        Err(error) => panic!("desktop receipt serialization failed: {error}"),
-    };
+    let serialized = json!({
+        "schema_version": "qsol-chatgpt-receipt/4",
+        "receipt_id": "d".repeat(64),
+        "action_id": "e".repeat(64),
+        "kind": "screen.capture",
+        "decision": "allow",
+        "status": "completed",
+        "desktop_evidence": {
+            "backend": "xdg_desktop_portal_screenshot",
+            "image_sha256": "c".repeat(64),
+            "image_bytes": 68,
+            "width": 1,
+            "height": 1,
+            "image_format": "png"
+        }
+    });
 
     let schema = read_schema("receipt.schema.json");
     let v4 = match schema
@@ -152,10 +184,6 @@ fn published_receipt_schema_accepts_representative_desktop_v4_shape() {
         Some(value) => value,
         None => panic!("receipt schema must publish desktop_receipt_v4"),
     };
-    assert_eq!(
-        serialized.get("schema_version").and_then(Value::as_str),
-        Some("qsol-chatgpt-receipt/4")
-    );
     assert_declared_object_shape(&serialized, v4);
 
     let evidence = match serialized.get("desktop_evidence") {

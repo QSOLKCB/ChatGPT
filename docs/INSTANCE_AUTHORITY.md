@@ -2,17 +2,28 @@
 
 ## Goal
 
-Prevent one Ubuntu login session from running multiple independent QSOL ChatGPT processes that each hold effectful machine authority or independently consume the same brokered OpenAI credential.
+Prevent one Ubuntu login session from running multiple independent QSOL ChatGPT runtimes that each hold effectful machine authority or independently consume the same brokered OpenAI credential.
 
 This is a local anti-sharing and authority-integrity control. It does **not** claim that a valid OpenAI credential can be classified as legitimate, stolen, resold, or otherwise by inspecting the credential bytes.
 
-## Lock contract
+## Runtime-enforced lock contract
 
-Before any non-denied `--execute` path proceeds, the process atomically creates:
+The single-instance lease is enforced inside the exported Rust authority API, not only by the CLI.
+
+Constructing either of these public effectful runtimes requires successful acquisition of the authority lease:
+
+```text
+Runtime::effectful()
+Runtime::effectful_with_obs(...)
+```
+
+Both constructors return `Result` and atomically create:
 
 ```text
 /run/user/<uid>/qsol-chatgpt-authority.lock
 ```
+
+The resulting `Runtime` owns the non-cloneable guard for its lifetime. A library consumer therefore cannot obtain an effectful runtime while bypassing the single-instance mechanism merely by avoiding the command-line frontend.
 
 The process validates:
 
@@ -22,7 +33,9 @@ The process validates:
 4. runtime directory has no group/other permission bits;
 5. lock file is created with create-new semantics and mode `0600`.
 
-If the lock already exists, execution fails closed.
+If the lock already exists, construction of another effectful runtime fails closed.
+
+Simulated runtimes do not claim the lease. A policy-denied CLI action is routed through the simulated runtime so it can still produce its deterministic denial receipt without requiring machine authority.
 
 ## Why not silently delete a stale lock?
 

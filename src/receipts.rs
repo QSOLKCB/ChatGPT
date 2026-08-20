@@ -192,7 +192,7 @@ impl Receipt {
         })
     }
 
-    pub fn new_desktop(
+    pub(crate) fn new_desktop(
         action: &Action,
         decision: Disposition,
         status: ReceiptStatus,
@@ -221,5 +221,59 @@ impl Receipt {
             desktop_evidence,
             error_code,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::contracts::{ProposedAction, PROPOSAL_SCHEMA_VERSION};
+
+    use super::*;
+
+    fn screen_action() -> Action {
+        let proposal = ProposedAction {
+            schema_version: PROPOSAL_SCHEMA_VERSION.to_owned(),
+            kind: "screen.capture".to_owned(),
+            args: Default::default(),
+            requested_by: "agent".to_owned(),
+            credential_handles: Vec::new(),
+        };
+        match proposal.normalize() {
+            Ok(value) => value,
+            Err(error) => panic!("screen action fixture failed: {error}"),
+        }
+    }
+
+    #[test]
+    fn desktop_constructor_serializes_only_the_v4_shape() {
+        let action = screen_action();
+        let evidence = DesktopEvidence {
+            backend: "xdg_desktop_portal_screenshot".to_owned(),
+            image_sha256: "a".repeat(64),
+            image_bytes: 68,
+            width: 1,
+            height: 1,
+            image_format: "png".to_owned(),
+        };
+        let receipt = Receipt::new_desktop(
+            &action,
+            Disposition::Allow,
+            ReceiptStatus::Completed,
+            Some(evidence),
+            None,
+        );
+        let value = match receipt.and_then(|receipt| {
+            serde_json::to_value(receipt).map_err(|_| ContractError::Serialization)
+        }) {
+            Ok(value) => value,
+            Err(error) => panic!("desktop receipt fixture failed: {error}"),
+        };
+        assert_eq!(
+            value.get("schema_version").and_then(serde_json::Value::as_str),
+            Some(DESKTOP_RECEIPT_SCHEMA_VERSION)
+        );
+        assert!(value.get("desktop_evidence").is_some());
+        assert!(value.get("obs_evidence").is_none());
+        assert!(value.get("evidence").is_none());
     }
 }

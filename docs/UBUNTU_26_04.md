@@ -20,6 +20,8 @@ Use the standard XDG Desktop Portal Screenshot interface through `ashpd`.
 
 The portal remains the authority boundary for desktop capture. The application does not bypass the user/compositor permission path.
 
+The synchronous Rust capability API runs the async portal exchange on a dedicated worker thread with its own Tokio runtime. This avoids nesting `block_on` inside an existing Tokio executor when the library is called from async applications.
+
 ### Sustained visual observation
 
 Future continuous computer vision should use:
@@ -64,10 +66,13 @@ Therefore:
 
 - screenshot bytes are treated as ephemeral sensitive data;
 - raw bytes are never serialized into receipts or logs;
-- the audit record stores content hash, byte size, dimensions when available, and cleanup status;
-- in-memory screenshot storage uses zeroizing buffers;
+- the audit record stores content hash, byte size, dimensions, backend identity, and image format only;
+- the file size is verified before allocation and screenshot bytes are read into one pre-sized zeroizing allocation, avoiding growth reallocations that could leave frame fragments in freed heap memory;
+- the complete PNG chunk stream is validated through `IEND`, including chunk CRCs, before a capture can be recorded as completed;
 - the portal artifact path/URI is never written into the receipt;
-- the temporary portal artifact is deleted on a best-effort basis immediately after bounded ingestion.
+- parent-directory URI components are rejected;
+- best-effort cleanup canonicalizes the portal path and only unlinks regular files that remain beneath canonical `/tmp`, `/var/tmp`, or the validated `/run/user/<uid>` runtime directory;
+- symlink or traversal targets outside those approved roots are never deleted by cleanup.
 
 ## X11 compatibility
 

@@ -1,6 +1,7 @@
 use crate::contracts::{Action, Approval, ContractError};
 use crate::desktop;
 use crate::executor;
+use crate::instance::{AuthorityInstanceGuard, InstanceError};
 use crate::obs::{self, ObsConnectionConfig};
 use crate::policy::{self, Disposition};
 use crate::receipts::{Receipt, ReceiptStatus};
@@ -9,6 +10,7 @@ use crate::secrets::SecretStore;
 pub struct Runtime {
     execute_effects: bool,
     obs: Option<ObsRuntime>,
+    _authority_instance: Option<AuthorityInstanceGuard>,
 }
 
 struct ObsRuntime {
@@ -21,21 +23,29 @@ impl Runtime {
         Self {
             execute_effects: false,
             obs: None,
+            _authority_instance: None,
         }
     }
 
-    pub fn effectful() -> Self {
-        Self {
+    pub fn effectful() -> Result<Self, InstanceError> {
+        let authority_instance = AuthorityInstanceGuard::acquire()?;
+        Ok(Self {
             execute_effects: true,
             obs: None,
-        }
+            _authority_instance: Some(authority_instance),
+        })
     }
 
-    pub fn effectful_with_obs(config: ObsConnectionConfig, secrets: SecretStore) -> Self {
-        Self {
+    pub fn effectful_with_obs(
+        config: ObsConnectionConfig,
+        secrets: SecretStore,
+    ) -> Result<Self, InstanceError> {
+        let authority_instance = AuthorityInstanceGuard::acquire()?;
+        Ok(Self {
             execute_effects: true,
             obs: Some(ObsRuntime { config, secrets }),
-        }
+            _authority_instance: Some(authority_instance),
+        })
     }
 
     pub fn run(&self, action: &Action, approval: Option<&Approval>) -> Result<Receipt, ContractError> {
@@ -157,6 +167,7 @@ impl Runtime {
             ),
             Err(
                 desktop::DesktopError::RuntimeUnavailable
+                | desktop::DesktopError::PortalThreadFailed
                 | desktop::DesktopError::PortalFailed
                 | desktop::DesktopError::ScreenshotOpenFailed,
             ) => Receipt::new_desktop(
@@ -236,15 +247,20 @@ impl Runtime {
                 None,
                 Some("obs_protocol_or_request_failed"),
             ),
-            Err(obs::ObsError::ResponseTooLarge | obs::ObsError::DeadlineExceeded) => {
-                Receipt::new_obs(
-                    action,
-                    decision,
-                    ReceiptStatus::Failed,
-                    None,
-                    Some("obs_response_or_deadline_bound"),
-                )
-            }
+            Err(obs::ObsError::ResponseTooLarge) => Receipt::new_obs(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("obs_response_too_large"),
+            ),
+            Err(obs::ObsError::DeadlineExceeded) => Receipt::new_obs(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("obs_deadline_exceeded"),
+            ),
             Err(obs::ObsError::EndpointBindingMismatch) => Receipt::new_obs(
                 action,
                 decision,
@@ -252,6 +268,15 @@ impl Runtime {
                 None,
                 Some("obs_endpoint_binding_mismatch"),
             ),
+        }
+    }
+
+    #[cfg(test)]
+    fn effectful_for_test() -> Self {
+        Self {
+            execute_effects: true,
+            obs: None,
+            _authority_instance: None,
         }
     }
 }
@@ -320,7 +345,7 @@ mod tests {
         let action = action(
             r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.list","args":{"obs_port":4455}}"#,
         );
-        let receipt = Runtime::effectful().run(&action, None);
+        let receipt = Runtime::effectful_for_test().run(&action, None);
         match receipt {
             Ok(receipt) => {
                 assert_eq!(receipt.status, ReceiptStatus::Unsupported);

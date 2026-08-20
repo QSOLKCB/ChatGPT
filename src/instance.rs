@@ -15,21 +15,11 @@ pub struct AuthorityInstanceGuard {
 
 impl AuthorityInstanceGuard {
     pub fn acquire() -> Result<Self, InstanceError> {
-        let uid = current_uid()?;
-        let expected_runtime = PathBuf::from(format!("/run/user/{uid}"));
-        let runtime_dir = match env::var_os("XDG_RUNTIME_DIR") {
-            Some(value) => PathBuf::from(value),
-            None => expected_runtime.clone(),
-        };
-
-        if runtime_dir != expected_runtime {
-            return Err(InstanceError::UnexpectedRuntimeDirectory);
-        }
-        validate_runtime_directory(&runtime_dir, uid)?;
+        let runtime_dir = validated_runtime_directory()?;
         Self::acquire_in(&runtime_dir)
     }
 
-    fn acquire_in(runtime_dir: &Path) -> Result<Self, InstanceError> {
+    pub(crate) fn acquire_in(runtime_dir: &Path) -> Result<Self, InstanceError> {
         let path = runtime_dir.join(AUTHORITY_LOCK_NAME);
         let mut options = OpenOptions::new();
         options.write(true).create_new(true).mode(0o600);
@@ -74,6 +64,21 @@ pub enum InstanceError {
     LockCreateFailed,
     #[error("failed to initialize the authority-instance lock")]
     LockWriteFailed,
+}
+
+pub(crate) fn validated_runtime_directory() -> Result<PathBuf, InstanceError> {
+    let uid = current_uid()?;
+    let expected_runtime = PathBuf::from(format!("/run/user/{uid}"));
+    let runtime_dir = match env::var_os("XDG_RUNTIME_DIR") {
+        Some(value) => PathBuf::from(value),
+        None => expected_runtime.clone(),
+    };
+
+    if runtime_dir != expected_runtime {
+        return Err(InstanceError::UnexpectedRuntimeDirectory);
+    }
+    validate_runtime_directory(&runtime_dir, uid)?;
+    Ok(runtime_dir)
 }
 
 fn current_uid() -> Result<u32, InstanceError> {

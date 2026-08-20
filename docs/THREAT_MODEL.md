@@ -26,7 +26,7 @@ Assume any of the following may be malicious or compromised:
 - tool output;
 - prompt-injection content embedded in otherwise legitimate data.
 
-The Ubuntu desktop portal/compositor and Linux kernel are part of the host trust base for desktop capture.
+The Ubuntu desktop portal/compositor, PipeWire service, and Linux kernel are part of the host trust base for desktop capture.
 
 ## Provider substitution
 
@@ -71,7 +71,7 @@ Mitigation: capability broker, default deny, explicit approvals, scoped credenti
 
 Risk: an action changes after the human approved it.
 
-Mitigation: normalize before approval, immutable public action API, approval bound to content-derived `action_id`. OBS endpoint identity is included in the action.
+Mitigation: normalize before approval, immutable public action API, approval bound to content-derived `action_id`. OBS endpoint identity and ScreenCast frame/time limits are included in the action.
 
 ## Approval replay
 
@@ -83,24 +83,65 @@ Current state: exact action binding exists. Session/nonce/expiry binding remains
 
 Risk: a read-only screenshot contains passwords, private messages, API keys, browser sessions, personal files, or other sensitive data.
 
-Mitigation in PR #3:
+Mitigation:
 - capture through the user-mediated XDG Screenshot portal on Ubuntu GNOME Wayland;
 - no model-controlled capture target/path arguments;
 - no credentials on `screen.capture` actions;
 - portal result must be a local `file://` URI;
-- screenshot input capped at 64 MiB and validated as PNG;
+- screenshot input capped at 64 MiB and validated as a complete PNG;
 - receipts contain hash/size/dimensions only;
 - raw screenshot bytes use zeroizing memory and are dropped after evidence derivation;
 - portal URI/path is never serialized into receipts;
-- temporary portal artifacts are deleted best-effort only when under known runtime/temp locations.
+- temporary portal artifacts are deleted best-effort only when canonicalized beneath approved runtime/temp roots.
 
 Raw screenshot forwarding to OpenAI remains gated until redaction and OpenAI credential/network controls land.
+
+## Sustained ScreenCast disclosure
+
+Risk: a ScreenCast stream exposes a continuous sequence of sensitive desktop pixels, and a long-running or malformed stream can exceed the human-approved observation scope.
+
+Mitigation in PR #4:
+- `screen.observe` requires exact human approval;
+- action identity binds `max_frames` (1..=300) and `max_duration_ms` (500..=30000);
+- the XDG ScreenCast portal remains the source-selection authority;
+- only one monitor or window is selected;
+- cursor capture is hidden;
+- `PersistMode::DoNot` is used and no restore token is retained;
+- the portal-provided PipeWire remote/node is kept internal;
+- each observed frame is limited to 64 MiB before any mapped payload is hashed;
+- raw frame payload is hashed in place and is never serialized or accumulated as an application-owned video archive;
+- receipts contain only frame-chain hash, frame/byte counts, bounded source geometry, and negotiated video metadata;
+- no raw ScreenCast frame is forwarded to OpenAI in this phase.
+
+### Deadline drift
+
+Risk: setup work occurs after the observation clock starts, but the PipeWire timer is armed for a fresh full duration, causing the actual observation and receipt duration to exceed the approved `max_duration_ms`.
+
+Mitigation: one monotonic `started/deadline` pair is created for the observation. Listener/stream setup consumes from that same window, the timer is armed only for the remaining duration, frame processing checks the deadline before reading a buffer, and receipt duration is derived from the same bounded clock.
+
+### Oversized mapped planes
+
+Risk: a producer supplies a very large mapped plane. Hashing it before enforcing the payload bound can block the PipeWire main loop and delay the duration timer.
+
+Mitigation: prospective cumulative frame size is checked against the 64 MiB limit before accessing/hashing the mapped plane payload.
+
+### Corrupted chunks
+
+Risk: PipeWire marks a chunk as corrupted, but the broker hashes/counts it as a valid observed frame.
+
+Mitigation: `SPA_CHUNK_FLAG_CORRUPTED` causes the observation to fail before hashing or frame counting.
+
+### Format renegotiation
+
+Risk: dimensions/framerate change during one observation, but the receipt describes only the final format while the frame chain includes earlier-format data.
+
+Mitigation: one immutable negotiated raw-video format is allowed per observation. Repeated identical format events are accepted; any transition to a different size/framerate fails the observation and produces no successful v5 evidence.
 
 ## Desktop API bypass
 
 Risk: a computer-use feature bypasses Wayland portal authority using private GNOME APIs, X11 global scraping, or shell helpers.
 
-Mitigation: Ubuntu 26.04 primary path is XDG Desktop Portal. GNOME Shell Eval/private Mutter APIs, `xdotool`, `wmctrl`, and X11 root capture are not primary mechanisms.
+Mitigation: Ubuntu 26.04 primary path is XDG Desktop Portal and portal-granted PipeWire. GNOME Shell Eval/private Mutter APIs, `xdotool`, `wmctrl`, and X11 root capture are not primary mechanisms.
 
 ## Secret injection into model-visible data
 
@@ -112,7 +153,7 @@ Mitigation: opaque handles, secret-shaped key rejection, non-serializable secret
 
 Risk: a credential or screenshot remains in freed/reused memory.
 
-Mitigation: zeroizing containers and minimized lifetime. Rust memory safety alone is explicitly not considered secret erasure.
+Mitigation: zeroizing containers and minimized lifetime. Rust memory safety alone is explicitly not considered secret erasure. ScreenCast payloads are consumed from PipeWire-owned mapped buffers and are not copied into persistent application-owned frame archives.
 
 ## Ambient environment leakage
 
@@ -127,7 +168,8 @@ Risk: a process, OBS server, or desktop backend returns credentials/private data
 Mitigation:
 - process receipts store hashes/byte counts rather than stdout/stderr;
 - OBS arbitrary strings are hashed before receipts;
-- desktop receipts store image hashes/metadata only;
+- one-shot desktop receipts store image hashes/metadata only;
+- ScreenCast v5 receipts store a frame-chain hash and bounded metadata only;
 - raw payloads are not audit evidence.
 
 ## Shell escape
@@ -166,4 +208,4 @@ Current state: TUI revocation is not yet fully authoritative over every active e
 
 ## Security posture
 
-The current system establishes authority contracts, OBS structured control, single-instance local authority, OpenAI-only provider constraints, and one-shot Ubuntu Wayland screenshot observation. It does not yet claim full containment or autonomous computer-use readiness.
+The current system establishes authority contracts, OBS structured control, single-instance local authority, OpenAI-only provider constraints, one-shot Ubuntu Wayland screenshot observation, and bounded XDG ScreenCast/PipeWire sustained observation. It does not yet forward visual frames to OpenAI, inject keyboard/mouse input, or claim full containment/autonomous computer-use readiness.

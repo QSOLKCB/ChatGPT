@@ -78,7 +78,7 @@ struct PortalGrant {
     fd: OwnedFd,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NegotiatedFormat {
     width: u32,
     height: u32,
@@ -88,6 +88,8 @@ struct NegotiatedFormat {
 
 struct ObserverState {
     started: Instant,
+    deadline: Instant,
+    ended: Option<Instant>,
     max_frames: u32,
     frames_observed: u32,
     payload_bytes_hashed: u64,
@@ -97,16 +99,55 @@ struct ObserverState {
 }
 
 impl ObserverState {
-    fn new(bounds: ObservationBounds) -> Self {
-        Self {
-            started: Instant::now(),
+    fn new(bounds: ObservationBounds) -> Result<Self, ScreencastError> {
+        let started = Instant::now();
+        let deadline = started
+            .checked_add(Duration::from_millis(bounds.max_duration_ms))
+            .ok_or(ScreencastError::DeadlineExceeded)?;
+        Ok(Self {
+            started,
+            deadline,
+            ended: None,
             max_frames: bounds.max_frames,
             frames_observed: 0,
             payload_bytes_hashed: 0,
             frame_chain: Sha256::new(),
             format: None,
             error: None,
+        })
+    }
+
+    fn set_format(&mut self, format: NegotiatedFormat) -> Result<(), ScreencastError> {
+        match self.format {
+            None => {
+                self.format = Some(format);
+                Ok(())
+            }
+            Some(existing) if existing == format => Ok(()),
+            Some(_) => Err(ScreencastError::FormatChanged),
         }
+    }
+
+    fn remaining(&self) -> Result<Duration, ScreencastError> {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            Err(ScreencastError::DeadlineExceeded)
+        } else {
+            Ok(remaining)
+        }
+    }
+
+    fn deadline_reached(&mut self) -> bool {
+        if Instant::now() >= self.deadline {
+            self.ended = Some(self.deadline);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn mark_deadline(&mut self) {
+        self.ended = Some(self.deadline);
     }
 
     fn record_frame_digest(&mut self, digest: &[u8], payload_bytes: u64) -> bool {
@@ -120,8 +161,32 @@ impl ObserverState {
         self.frame_chain.update(payload_bytes.to_be_bytes());
         self.frame_chain.update(digest);
         self.frames_observed += 1;
-        self.frames_observed >= self.max_frames
+        if self.frames_observed >= self.max_frames {
+            let now = Instant::now();
+            self.ended = Some(if now > self.deadline {
+                self.deadline
+            } else {
+                now
+            });
+            true
+        } else {
+            false
+        }
     }
+
+    fn duration_ms(&self) -> Result<u64, ScreencastError> {
+        let ended = self.ended.ok_or(ScreencastError::PipeWireFailed)?;
+        u64::try_from(ended.duration_since(self.started).as_millis())
+            .map_err(|_| ScreencastError::DeadlineExceeded)
+    }
+}
+
+fn next_frame_payload_bytes(current: u64, plane_size: usize) -> Result<u64, ScreencastError> {
+    let plane_size = u64::try_from(plane_size).map_err(|_| ScreencastError::FrameBoundsExceeded)?;
+    current
+        .checked_add(plane_size)
+        .filter(|total| *total <= MAX_FRAME_PAYLOAD_BYTES)
+        .ok_or(ScreencastError::FrameBoundsExceeded)
 }
 
 pub(crate) fn observe_live(action: &Action) -> Result<ScreencastEvidence, ScreencastError> {
@@ -240,7 +305,7 @@ fn observe_pipewire(
     )
     .map_err(|_| ScreencastError::PipeWireFailed)?;
 
-    let state = Rc::new(RefCell::new(ObserverState::new(bounds)));
+    let state = Rc::new(RefCell::new(ObserverState::new(bounds)?));
 
     let format_state = Rc::clone(&state);
     let format_loop = mainloop.clone();
@@ -290,14 +355,23 @@ fn observe_pipewire(
                 format_loop.quit();
                 return;
             }
-            format_state.borrow_mut().format = Some(NegotiatedFormat {
+            let negotiated = NegotiatedFormat {
                 width: size.width,
                 height: size.height,
                 framerate_num: framerate.num,
                 framerate_denom: framerate.denom,
-            });
+            };
+            if let Err(error) = format_state.borrow_mut().set_format(negotiated) {
+                format_state.borrow_mut().error = Some(error);
+                format_loop.quit();
+            }
         })
         .process(move |stream, _| {
+            if process_state.borrow_mut().deadline_reached() {
+                process_loop.quit();
+                return;
+            }
+
             let Some(mut buffer) = stream.dequeue_buffer() else {
                 return;
             };
@@ -309,6 +383,16 @@ fn observe_pipewire(
             let mut frame_hasher = Sha256::new();
             let mut frame_bytes = 0u64;
             for (plane_index, data) in datas.iter_mut().enumerate() {
+                if data
+                    .chunk()
+                    .flags()
+                    .contains(spa::buffer::ChunkFlags::CORRUPTED)
+                {
+                    process_state.borrow_mut().error = Some(ScreencastError::CorruptedFrame);
+                    process_loop.quit();
+                    return;
+                }
+
                 let offset = match usize::try_from(data.chunk().offset()) {
                     Ok(value) => value,
                     Err(_) => {
@@ -328,6 +412,16 @@ fn observe_pipewire(
                 if size == 0 {
                     continue;
                 }
+
+                let next_frame_bytes = match next_frame_payload_bytes(frame_bytes, size) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        process_state.borrow_mut().error = Some(error);
+                        process_loop.quit();
+                        return;
+                    }
+                };
+
                 let Some(slice) = data.data() else {
                     process_state.borrow_mut().error = Some(ScreencastError::UnmappableFrame);
                     process_loop.quit();
@@ -348,14 +442,7 @@ fn observe_pipewire(
                 if second_len > 0 {
                     frame_hasher.update(&slice[..second_len]);
                 }
-                frame_bytes = match frame_bytes.checked_add(u64::try_from(size).unwrap_or(u64::MAX)) {
-                    Some(value) if value <= MAX_FRAME_PAYLOAD_BYTES => value,
-                    _ => {
-                        process_state.borrow_mut().error = Some(ScreencastError::FrameBoundsExceeded);
-                        process_loop.quit();
-                        return;
-                    }
-                };
+                frame_bytes = next_frame_bytes;
             }
             if frame_bytes == 0 {
                 return;
@@ -370,16 +457,6 @@ fn observe_pipewire(
             }
         })
         .register()
-        .map_err(|_| ScreencastError::PipeWireFailed)?;
-
-    let timer_loop = mainloop.clone();
-    let timer = mainloop.loop_().add_timer(move |_| timer_loop.quit());
-    timer
-        .update_timer(
-            Some(Duration::from_millis(bounds.max_duration_ms)),
-            None,
-        )
-        .into_result()
         .map_err(|_| ScreencastError::PipeWireFailed)?;
 
     let obj = spa::pod::object!(
@@ -454,6 +531,18 @@ fn observe_pipewire(
         )
         .map_err(|_| ScreencastError::PipeWireFailed)?;
 
+    let remaining = state.borrow().remaining()?;
+    let timer_state = Rc::clone(&state);
+    let timer_loop = mainloop.clone();
+    let timer = mainloop.loop_().add_timer(move |_| {
+        timer_state.borrow_mut().mark_deadline();
+        timer_loop.quit();
+    });
+    timer
+        .update_timer(Some(remaining), None)
+        .into_result()
+        .map_err(|_| ScreencastError::PipeWireFailed)?;
+
     mainloop.run();
 
     let mut state = state.borrow_mut();
@@ -464,7 +553,7 @@ fn observe_pipewire(
         return Err(ScreencastError::NoFramesObserved);
     }
     let format = state.format.ok_or(ScreencastError::FormatUnavailable)?;
-    let duration_ms = u64::try_from(state.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let duration_ms = state.duration_ms()?;
     let frame_chain = std::mem::take(&mut state.frame_chain).finalize();
 
     Ok(ScreencastEvidence {
@@ -503,10 +592,16 @@ pub(crate) enum ScreencastError {
     PipeWireFailed,
     #[error("PipeWire did not provide a supported raw video format")]
     FormatUnavailable,
+    #[error("PipeWire renegotiated the video format during one observation")]
+    FormatChanged,
+    #[error("PipeWire supplied a corrupted frame chunk")]
+    CorruptedFrame,
     #[error("PipeWire frame could not be mapped")]
     UnmappableFrame,
     #[error("PipeWire frame exceeded a bounded payload contract")]
     FrameBoundsExceeded,
+    #[error("bounded ScreenCast observation exceeded its approved deadline")]
+    DeadlineExceeded,
     #[error("bounded ScreenCast session ended before any frame was observed")]
     NoFramesObserved,
 }
@@ -538,6 +633,15 @@ mod tests {
         }
     }
 
+    fn format(width: u32, height: u32) -> NegotiatedFormat {
+        NegotiatedFormat {
+            width,
+            height,
+            framerate_num: 30,
+            framerate_denom: 1,
+        }
+    }
+
     #[test]
     fn bounds_are_part_of_the_action_identity() {
         let first = action(60, 5_000);
@@ -565,8 +669,14 @@ mod tests {
             max_frames: 2,
             max_duration_ms: 1_000,
         };
-        let mut left = ObserverState::new(bounds);
-        let mut right = ObserverState::new(bounds);
+        let mut left = match ObserverState::new(bounds) {
+            Ok(value) => value,
+            Err(error) => panic!("observer state failed: {error}"),
+        };
+        let mut right = match ObserverState::new(bounds) {
+            Ok(value) => value,
+            Err(error) => panic!("observer state failed: {error}"),
+        };
         let a = Sha256::digest(b"frame-a");
         let b = Sha256::digest(b"frame-b");
         assert!(!left.record_frame_digest(a.as_ref(), 7));
@@ -576,5 +686,54 @@ mod tests {
         let left_hash = std::mem::take(&mut left.frame_chain).finalize();
         let right_hash = std::mem::take(&mut right.frame_chain).finalize();
         assert_ne!(left_hash.as_ref(), right_hash.as_ref());
+    }
+
+    #[test]
+    fn format_transition_fails_closed() {
+        let bounds = ObservationBounds {
+            max_frames: 2,
+            max_duration_ms: 1_000,
+        };
+        let mut state = match ObserverState::new(bounds) {
+            Ok(value) => value,
+            Err(error) => panic!("observer state failed: {error}"),
+        };
+        assert!(state.set_format(format(1920, 1080)).is_ok());
+        assert!(state.set_format(format(1920, 1080)).is_ok());
+        assert!(matches!(
+            state.set_format(format(1280, 720)),
+            Err(ScreencastError::FormatChanged)
+        ));
+    }
+
+    #[test]
+    fn prospective_payload_bound_is_checked_before_hashing() {
+        let almost_full = MAX_FRAME_PAYLOAD_BYTES - 1;
+        assert_eq!(
+            next_frame_payload_bytes(almost_full, 1).ok(),
+            Some(MAX_FRAME_PAYLOAD_BYTES)
+        );
+        assert!(matches!(
+            next_frame_payload_bytes(almost_full, 2),
+            Err(ScreencastError::FrameBoundsExceeded)
+        ));
+    }
+
+    #[test]
+    fn deadline_and_receipt_clock_share_one_window() {
+        let bounds = ObservationBounds {
+            max_frames: 2,
+            max_duration_ms: 1_000,
+        };
+        let mut state = match ObserverState::new(bounds) {
+            Ok(value) => value,
+            Err(error) => panic!("observer state failed: {error}"),
+        };
+        assert_eq!(
+            state.deadline.duration_since(state.started),
+            Duration::from_millis(bounds.max_duration_ms)
+        );
+        state.mark_deadline();
+        assert_eq!(state.duration_ms().ok(), Some(bounds.max_duration_ms));
     }
 }

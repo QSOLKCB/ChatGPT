@@ -245,6 +245,13 @@ impl Runtime {
                     Some("obs_response_or_deadline_bound"),
                 )
             }
+            Err(obs::ObsError::EndpointBindingMismatch) => Receipt::new_obs(
+                action,
+                decision,
+                ReceiptStatus::Denied,
+                None,
+                Some("obs_endpoint_binding_mismatch"),
+            ),
         }
     }
 }
@@ -267,7 +274,9 @@ fn receipt_without_evidence(
 #[cfg(test)]
 mod tests {
     use crate::contracts::{Approval, ProposedAction};
-    use crate::receipts::{DESKTOP_RECEIPT_SCHEMA_VERSION, ReceiptStatus};
+    use crate::receipts::{
+        DESKTOP_RECEIPT_SCHEMA_VERSION, OBS_RECEIPT_SCHEMA_VERSION, ReceiptStatus,
+    };
 
     use super::*;
 
@@ -289,7 +298,10 @@ mod tests {
         let approval = Approval::allow_once(&first, "human");
         let receipt = Runtime::simulated().run(&second, Some(&approval));
         assert!(receipt.is_ok());
-        assert_eq!(receipt.ok().map(|r| r.status), Some(ReceiptStatus::ApprovalRequired));
+        assert_eq!(
+            receipt.ok().map(|r| r.status),
+            Some(ReceiptStatus::ApprovalRequired)
+        );
     }
 
     #[test]
@@ -297,7 +309,38 @@ mod tests {
         let action = action(r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","hello"]}}"#);
         let approval = Approval::allow_once(&action, "human");
         let receipt = Runtime::simulated().run(&action, Some(&approval));
-        assert_eq!(receipt.ok().map(|r| r.status), Some(ReceiptStatus::Simulated));
+        assert_eq!(
+            receipt.ok().map(|r| r.status),
+            Some(ReceiptStatus::Simulated)
+        );
+    }
+
+    #[test]
+    fn live_obs_action_without_config_is_unsupported() {
+        let action = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.list","args":{"obs_port":4455}}"#,
+        );
+        let receipt = Runtime::effectful().run(&action, None);
+        match receipt {
+            Ok(receipt) => {
+                assert_eq!(receipt.status, ReceiptStatus::Unsupported);
+                assert_eq!(receipt.schema_version, OBS_RECEIPT_SCHEMA_VERSION);
+            }
+            Err(error) => panic!("unexpected receipt error: {error}"),
+        }
+    }
+
+    #[test]
+    fn stream_start_cannot_be_overridden_by_approval() {
+        let action = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.stream.start","args":{"obs_port":4455}}"#,
+        );
+        let approval = Approval::allow_once(&action, "human");
+        let receipt = Runtime::simulated().run(&action, Some(&approval));
+        assert_eq!(
+            receipt.ok().map(|r| r.status),
+            Some(ReceiptStatus::Denied)
+        );
     }
 
     #[test]

@@ -297,11 +297,70 @@ mod tests {
     }
 
     #[test]
+    fn shell_escape_is_denied() {
+        for argv in [
+            r#"["bash","-c","echo nope"]"#,
+            r#"["dash","-c","echo nope"]"#,
+            r#"["bash","-lc","echo nope"]"#,
+            r#"["/usr/bin/env","bash","-lc","echo nope"]"#,
+            r#"["pwsh","-Command","Write-Output nope"]"#,
+        ] {
+            let json = format!(
+                r#"{{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{{"argv":{argv}}}}}"#
+            );
+            let action = action(&json);
+            assert_eq!(evaluate(&action).code, "shell_escape", "argv={argv}");
+        }
+    }
+
+    #[test]
+    fn obs_reads_are_allowed_but_mutations_require_approval() {
+        let read = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.list","args":{"obs_port":4455}}"#,
+        );
+        let mutation = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.record.start","args":{"obs_port":4455}}"#,
+        );
+        assert_eq!(evaluate(&read).disposition, Disposition::Allow);
+        assert_eq!(
+            evaluate(&mutation).disposition,
+            Disposition::ApprovalRequired
+        );
+    }
+
+    #[test]
+    fn obs_endpoint_must_be_bound_into_action() {
+        let action = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.record.start"}"#,
+        );
+        assert_eq!(evaluate(&action).disposition, Disposition::Deny);
+        assert_eq!(evaluate(&action).code, "obs_endpoint_unbound");
+    }
+
+    #[test]
     fn obs_stream_start_is_explicitly_denied() {
         let action = action(
             r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.stream.start","args":{"obs_port":4455}}"#,
         );
         assert_eq!(evaluate(&action).disposition, Disposition::Deny);
         assert_eq!(evaluate(&action).code, "broadcast_start_disabled");
+    }
+
+    #[test]
+    fn raw_obs_request_escape_is_denied() {
+        let action = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.raw_request","args":{"obs_port":4455,"request_type":"StartStream"}}"#,
+        );
+        assert_eq!(evaluate(&action).disposition, Disposition::Deny);
+        assert_eq!(evaluate(&action).code, "unknown_capability");
+    }
+
+    #[test]
+    fn malformed_obs_scene_change_is_denied() {
+        let action = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.set","args":{"obs_port":4455,"scene_name":""}}"#,
+        );
+        assert_eq!(evaluate(&action).disposition, Disposition::Deny);
+        assert_eq!(evaluate(&action).code, "obs_invalid_arguments");
     }
 }

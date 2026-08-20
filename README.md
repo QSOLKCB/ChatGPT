@@ -1,76 +1,110 @@
 # ChatGPT
 
-A clean-room, Linux-native agent workstation built around a **Rust authority core** and a **terminal human-control plane**.
+A clean-room, **Ubuntu 26.04 LTS / GNOME / Wayland** workstation for giving OpenAI models controlled, inspectable access to local computer capabilities.
 
 > **Independent community project.** Not affiliated with or endorsed by OpenAI. ChatGPT is a trademark of OpenAI.
 
-## Mission
-
-Give AI systems useful access to a computer without confusing intelligence with authority.
-
-```text
-model/provider -> proposes action
-                    |
-                    v
-             Rust authority core
-                    |
-              policy decision
-              /     |      \
-           deny  approve   allow
-                    |
-                    v
-             capability broker
-                    |
-                    v
-               host/sandbox
-                    |
-                    v
-                  receipt
-
-Human <---------- Ratatui TUI ----------> authority core
-```
-
-The prime invariant is:
+## Prime invariant
 
 ```text
 CAPABILITY != AUTHORITY
 ```
 
-The model may reason about an action. Only the local runtime may authorize and execute it.
+The model proposes. The local Rust runtime decides what authority exists. The human can refuse or revoke it.
 
-## Why Rust + TUI
+## Deliberate scope
 
-This application sits between models and operating-system capabilities, eventually including API credentials, authenticated sessions, filesystem access, input injection, browser state, media tools, and long-running processes.
+This project is intentionally narrow:
 
-Rust is the trusted implementation language because memory safety, strong types, ownership, and explicit state transitions are valuable properties at that boundary. A TUI keeps the human control plane small, inspectable, fast, SSH-friendly, and free of a heavyweight GUI stack.
+- **OpenAI-only model/provider boundary**;
+- official OpenAI API origin fixed to `https://api.openai.com`;
+- Ubuntu 26.04 LTS is the primary desktop target;
+- GNOME Wayland uses XDG Desktop Portal rather than X11 scraping or private GNOME APIs;
+- one authority-bearing process per Ubuntu user session;
+- OBS is controlled through its loopback WebSocket API, not GUI clicking;
+- input injection and persistent autonomous control are still gated behind later security phases.
 
-Rust memory safety is **not** secret erasure. The bootstrap therefore also uses zeroizing secret containers, redacted debug output, opaque credential handles, cleared subprocess environments, and a rule that raw secrets never enter action JSON, receipts, logs, or TUI state.
+There is no generic provider registry, arbitrary model `base_url`, Azure OpenAI adapter, Anthropic/Gemini/xAI adapter, OpenRouter adapter, Ollama/LM Studio adapter, or OpenAI-compatible third-party endpoint mode.
 
-Python remains welcome for scientific, media, automation, and generated worker tasks. It runs *behind* the Rust capability broker rather than guarding authority itself.
+See `docs/OPENAI_ONLY.md`.
 
-## Current bootstrap
+## Architecture
 
-The Rust skeleton now includes:
+```text
+                         HUMAN
+                           |
+                    +------+-------+
+                    | Ratatui TUI  |
+                    | control plane|
+                    +------+-------+
+                           |
+                    grant / revoke
+                           |
+                           v
+OpenAI proposal ---> Rust authority core ---> capability broker ---> Ubuntu / OBS
+                           |                        |
+                           |                        +-> XDG Portal screenshot
+                           |                        +-> OBS loopback websocket
+                           |                        +-> bounded process executor
+                           |
+                           +-> secret broker
+                           +-> deterministic receipts
+```
 
-- immutable normalized actions with content-derived identities;
-- separate untrusted proposals and normalized executable actions;
-- a default-deny policy kernel;
-- exact action-bound approval records;
-- hard denial of unknown capabilities and obvious shell escapes/privilege escalation;
-- structured argv execution only, disabled unless `--execute` is supplied;
-- cleared child-process environment with a minimal fixed environment;
-- hashed output evidence instead of stdout/stderr persistence;
-- zeroization of captured subprocess output after evidence is derived;
-- opaque `cred:*` handles and an in-memory zeroizing secret store;
-- raw secret-shaped action fields rejected during normalization;
-- deterministic receipts without wall-clock data in their identity;
-- a Ratatui authority console with an emergency revoke state;
-- language-neutral JSON Schemas;
-- Rust unit/integration tests and CI with `fmt`, `clippy`, and `test`.
+## Single authority instance
 
-This is **not yet a production sandbox or autonomous desktop-control product**. See `ROADMAP.md`.
+Effectful execution acquires an atomic per-user lock at:
 
-## Build and test
+```text
+/run/user/<uid>/qsol-chatgpt-authority.lock
+```
+
+A second effectful instance fails closed. The runtime validates that the lock directory is the expected Ubuntu `XDG_RUNTIME_DIR`, owned by the current UID, and not accessible to group/other users.
+
+This is not a claim that the application can identify a stolen or resold credential from its bytes. Instead it prevents this workstation from becoming a convenient multi-instance credential-sharing host.
+
+A crash may leave a stale lock. That intentionally fails closed rather than guessing that a lock is safe to steal.
+
+## Ubuntu 26.04 observation
+
+`screen.capture` now has a real Ubuntu Wayland backend:
+
+```text
+screen.capture
+    -> Rust policy
+    -> authority-instance guard
+    -> org.freedesktop.portal.Screenshot
+    -> bounded local PNG ingestion
+    -> SHA-256 + dimensions
+    -> receipt/4
+    -> raw screenshot buffer zeroized
+```
+
+The screenshot path, URI, and raw image bytes are never serialized into receipts.
+
+The portal artifact is accepted only as a local `file://` URI. Capture is capped at 64 MiB and must be a PNG. Temporary artifacts under `/run/user`, `/tmp`, or `/var/tmp` are removed on a best-effort basis after ingestion.
+
+For sustained future vision, the planned Ubuntu-native path is **XDG ScreenCast + PipeWire**, not repeated screenshot polling.
+
+## OBS control
+
+The OBS adapter remains loopback-only and authority-gated. Supported operations include scene/status inspection, scene switching, recording start/stop, and stream stop. `obs.stream.start` remains explicitly denied until a stronger broadcast approval class exists.
+
+## OpenAI credentials
+
+PR #3 defines the OpenAI-only provider configuration contract but does **not** yet add live OpenAI API credential use.
+
+Future credentials must:
+
+- use opaque `cred:openai.*` handles;
+- resolve through an OS keyring/Secret Service broker;
+- never be accepted as ChatGPT web cookies/session tokens;
+- never arrive through command-line arguments, ambient environment variables, receipts, logs, or repository files;
+- never be redirected to a caller-configurable provider endpoint.
+
+## Build
+
+Rust **1.87+** is required.
 
 ```bash
 git clone https://github.com/QSOLKCB/ChatGPT.git
@@ -80,58 +114,58 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 ```
 
-Launch the authority console:
+Launch the TUI:
 
 ```bash
 cargo run -- tui
 ```
 
-Inspect policy without executing anything:
-
-```bash
-cargo run -- policy \
-  '{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","hello\\n"]}}'
-```
-
-Simulate an approved action:
+Simulate screenshot authority without touching the desktop:
 
 ```bash
 cargo run -- run \
-  '{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","hello\\n"]}}' \
-  --approve
+  '{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.capture"}'
 ```
 
-Real host effects are deliberately opt-in during the bootstrap:
+Use the Ubuntu portal for a real one-shot screenshot:
 
 ```bash
 cargo run -- run \
-  '{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","hello\\n"]}}' \
-  --approve --execute
+  '{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.capture"}' \
+  --execute
 ```
 
-Do **not** use `--execute` with an untrusted model or privileged/production environment yet.
+The desktop may present its normal portal permission UI. The project does not bypass it.
 
 ## Repository map
 
 ```text
-src/contracts.rs       proposal, action, approval and credential-handle contracts
+src/contracts.rs       normalized authority contracts
+src/instance.rs        single authority-instance guard
+src/openai.rs          OpenAI-only provider configuration boundary
+src/desktop.rs         Ubuntu XDG Portal screenshot broker
+src/obs/               bounded OBS loopback broker
 src/policy.rs          default-deny authority decisions
-src/runtime.rs         approval gate and execution lifecycle
-src/executor.rs        disabled-by-default structured command executor
-src/receipts.rs        deterministic, secret-free receipts
+src/runtime.rs         approval + execution lifecycle
+src/receipts.rs        v2 process, v3 OBS, v4 desktop receipts
 src/secrets.rs         zeroizing in-memory secret primitives
-src/tui.rs             Ratatui human authority console
-schemas/               language-neutral contracts
-docs/                  architecture, threat model, computer-use and secret rules
-tests/                 cross-module contract tests
-README4AI.md            machine-oriented source map
-AGENTS.md               machine contributor invariants
-ROADMAP.md              authority-risk-ordered implementation plan
+src/tui.rs             human authority console
+schemas/               language-neutral machine contracts
+docs/                  security/architecture/platform decisions
 ```
 
-## Clean-room provenance
+## Current limits
 
-No source code from Noi, `lencx/ChatGPT`, or another desktop AI wrapper is used by this repository. General publicly known architectural concepts may be independently implemented. See `docs/PROVENANCE.md`.
+This is not yet a production autonomous computer-use system. In particular:
+
+- no keyboard/mouse injection;
+- no persistent observe/act loop;
+- no live OpenAI API credential broker;
+- no ScreenCast/PipeWire continuous frame stream yet;
+- no stable GNOME/Wayland global window enumeration or active-window implementation;
+- no comprehensive shell network namespace containment yet.
+
+See `ROADMAP.md` for the gates before those capabilities are enabled.
 
 ## License
 

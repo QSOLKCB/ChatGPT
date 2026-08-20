@@ -3,11 +3,11 @@
 ## Assets
 
 Protect:
+- OpenAI API credentials and account/project authority;
 - user files and filesystem integrity;
-- API keys, OAuth/session credentials and cookies;
-- authenticated accounts;
+- OBS credentials and broadcast/recording state;
 - shell/process authority;
-- desktop input authority;
+- desktop observation and future input authority;
 - browser state;
 - audit integrity;
 - approval meaning;
@@ -16,8 +16,7 @@ Protect:
 ## Adversaries / hostile inputs
 
 Assume any of the following may be malicious or compromised:
-- model output;
-- a provider response;
+- OpenAI/model output;
 - webpage/document text;
 - downloaded files;
 - repository contents;
@@ -27,68 +26,144 @@ Assume any of the following may be malicious or compromised:
 - tool output;
 - prompt-injection content embedded in otherwise legitimate data.
 
-## Primary failure modes
+The Ubuntu desktop portal/compositor and Linux kernel are part of the host trust base for desktop capture.
 
-### Confused deputy
-A model convinces the runtime to use authority the model itself does not possess.
+## Provider substitution
 
-Mitigation: capability broker, default deny, explicit approvals, scoped future credential broker.
+Risk: a configuration change redirects prompts, screenshots, or credentials to a third-party model endpoint while still looking “OpenAI-compatible.”
 
-### Action substitution after approval
-An action changes after the human approved it.
+Mitigation:
+- project is intentionally OpenAI-only;
+- official origin fixed to `https://api.openai.com`;
+- no arbitrary model `base_url` field;
+- no generic provider registry;
+- no Azure/OpenRouter/local/OpenAI-compatible adapters.
 
-Mitigation: normalize before approval, immutable public action API, approval bound to content-derived `action_id`.
+## Stolen/resold/shared credentials
 
-### Approval replay
-A previously approved action is reused in another session or later context.
+Risk: a valid credential obtained elsewhere is reused across multiple local application instances or the app accepts browser/session artifacts designed for account sharing.
 
-Current state: exact action binding exists. Session/nonce/expiry binding is Phase 1 and remains required before autonomous operation.
+Important limitation: the runtime cannot infer whether a cryptographically valid credential is stolen or resold merely from its bytes.
 
-### Secret injection into model-visible data
-Raw credentials appear in action arguments, receipts, logs, CLI text, or TUI state.
+Mitigation:
+- ChatGPT browser cookies/session/access tokens are not accepted as application credentials;
+- future OpenAI credentials use opaque `cred:openai.*` handles resolved by the OS secret broker;
+- no ambient environment-variable credential channel;
+- no raw credential CLI/config file path;
+- one authority-bearing process per Ubuntu user session;
+- future UI/agent roles share one authority daemon rather than spawning independent credential consumers.
 
-Mitigation: opaque handles, secret-shaped key rejection, non-serializable secret store, redacted debug, explicit documentation/test requirements.
+Server-side OpenAI account/project controls remain outside this local runtime and are still required for abuse outside this application.
 
-### Secret residue in memory
-A key remains in freed/reused memory.
+## Duplicate authority process
 
-Mitigation: zeroizing containers and minimized secret lifetime. Rust memory safety alone is explicitly not considered sufficient.
+Risk: two local application instances independently execute OS actions or consume the same brokered credential.
 
-### Ambient environment leakage
-A child command inherits `OPENAI_API_KEY`, SSH agent variables, cloud tokens, cookies or other host environment data.
+Mitigation: atomic `0600` authority lock under validated `/run/user/<uid>`. Existing or stale lock fails closed.
 
-Mitigation: bootstrap executor calls `env_clear()` and supplies only a minimal fixed environment. Future credential injection is explicit and scoped.
+## Confused deputy
 
-### Output exfiltration through receipts
-A command prints credentials or private data and the audit log persists it.
+Risk: OpenAI/model output convinces the runtime to use authority the model itself does not possess.
 
-Mitigation: receipts store SHA-256 and byte counts, not raw stdout/stderr; captured buffers are zeroized after evidence derivation.
+Mitigation: capability broker, default deny, explicit approvals, scoped credential broker.
 
-### Shell escape
-Structured argv is converted back into unrestricted shell text.
+## Action substitution after approval
 
-Mitigation: no raw shell-string contract; shell interpreter `-c` is denied in bootstrap policy; no `shell=true` equivalent.
+Risk: an action changes after the human approved it.
 
-### Privilege escalation
-The agent invokes sudo/doas/su or privileged helpers.
+Mitigation: normalize before approval, immutable public action API, approval bound to content-derived `action_id`. OBS endpoint identity is included in the action.
 
-Mitigation: common escalation commands are denied now; OS-level sandbox and privilege boundary are still required.
+## Approval replay
 
-### Network-policy bypass
-A shell program opens arbitrary sockets even though network authority was not intended.
+Risk: a previously approved action is reused in another session or later context.
 
-Current state: not solved comprehensively by command-name filtering. Real untrusted execution is forbidden until network namespace/policy enforcement lands in Phase 1.
+Current state: exact action binding exists. Session/nonce/expiry binding remains required before autonomous operation.
 
-### TUI spoof/confusion
-Model-controlled text tricks the human into granting unrelated authority.
+## Screenshot disclosure
+
+Risk: a read-only screenshot contains passwords, private messages, API keys, browser sessions, personal files, or other sensitive data.
+
+Mitigation in PR #3:
+- capture through the user-mediated XDG Screenshot portal on Ubuntu GNOME Wayland;
+- no model-controlled capture target/path arguments;
+- no credentials on `screen.capture` actions;
+- portal result must be a local `file://` URI;
+- screenshot input capped at 64 MiB and validated as PNG;
+- receipts contain hash/size/dimensions only;
+- raw screenshot bytes use zeroizing memory and are dropped after evidence derivation;
+- portal URI/path is never serialized into receipts;
+- temporary portal artifacts are deleted best-effort only when under known runtime/temp locations.
+
+Raw screenshot forwarding to OpenAI remains gated until redaction and OpenAI credential/network controls land.
+
+## Desktop API bypass
+
+Risk: a computer-use feature bypasses Wayland portal authority using private GNOME APIs, X11 global scraping, or shell helpers.
+
+Mitigation: Ubuntu 26.04 primary path is XDG Desktop Portal. GNOME Shell Eval/private Mutter APIs, `xdotool`, `wmctrl`, and X11 root capture are not primary mechanisms.
+
+## Secret injection into model-visible data
+
+Risk: raw credentials appear in action arguments, receipts, logs, CLI text, or TUI state.
+
+Mitigation: opaque handles, secret-shaped key rejection, non-serializable secret store, redacted debug, explicit tests/documentation.
+
+## Secret residue in memory
+
+Risk: a credential or screenshot remains in freed/reused memory.
+
+Mitigation: zeroizing containers and minimized lifetime. Rust memory safety alone is explicitly not considered secret erasure.
+
+## Ambient environment leakage
+
+Risk: a child command inherits `OPENAI_API_KEY`, SSH agent variables, cloud tokens, cookies, or other host environment data.
+
+Mitigation: process executor uses `env_clear()` and supplies only a minimal fixed environment. OpenAI credentials will not be sourced from ambient environment variables.
+
+## Output exfiltration through receipts
+
+Risk: a process, OBS server, or desktop backend returns credentials/private data and the audit log persists it.
+
+Mitigation:
+- process receipts store hashes/byte counts rather than stdout/stderr;
+- OBS arbitrary strings are hashed before receipts;
+- desktop receipts store image hashes/metadata only;
+- raw payloads are not audit evidence.
+
+## Shell escape
+
+Risk: structured argv is converted back into unrestricted shell text.
+
+Mitigation: no raw shell-string contract; known interpreter command-string forms are denied; no `shell=true` equivalent.
+
+## Privilege escalation
+
+Risk: the agent invokes sudo/doas/su or privileged helpers.
+
+Mitigation: common escalation commands are denied now; OS-level sandbox and privilege boundary remain required.
+
+## Network-policy bypass
+
+Risk: a shell program opens arbitrary sockets even though network authority was not intended.
+
+Current state: not solved comprehensively by command-name filtering. Real untrusted shell execution remains gated until network namespace/policy enforcement lands.
+
+OBS is a narrow exception: its adapter constructs IPv4 loopback endpoints internally and does not accept arbitrary hosts.
+
+Future OpenAI egress will be separately restricted to the official OpenAI origin.
+
+## TUI spoof/confusion
+
+Risk: model-controlled text tricks the human into granting unrelated authority.
 
 Mitigation target: render normalized action fields from trusted structures, visually separate untrusted content, exact action identity, explicit risk/capability labels, no model-controlled keybindings.
 
-### Kill-switch failure
-The user requests revoke-all but running processes/effectors continue.
+## Kill-switch failure
 
-Current state: bootstrap TUI displays revocation state only. Phase 1 requires runtime-authoritative revoke-all and process-tree termination before autonomous loops.
+Risk: the user requests revoke-all but running processes/effectors continue.
+
+Current state: TUI revocation is not yet fully authoritative over every active effector. Runtime-authoritative revoke-all and process/session termination remain gates before autonomous loops.
 
 ## Security posture
 
-The bootstrap demonstrates the authority model. It does not claim containment. Until the roadmap gates pass, `--execute` is a local developer tool only.
+The current system establishes authority contracts, OBS structured control, single-instance local authority, OpenAI-only provider constraints, and one-shot Ubuntu Wayland screenshot observation. It does not yet claim full containment or autonomous computer-use readiness.

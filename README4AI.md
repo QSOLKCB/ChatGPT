@@ -3,9 +3,11 @@
 ## Identity
 
 Project: `QSOLKCB/ChatGPT`
-Purpose: clean-room Linux-native AI workstation, capability broker, and human authority console.
+Purpose: Ubuntu 26.04 LTS / GNOME / Wayland OpenAI workstation, capability broker, and human authority console.
 Trusted implementation language: Rust.
 Human control plane: Ratatui TUI.
+Model/provider boundary: **OpenAI only**.
+Official API origin: `https://api.openai.com`.
 License: Apache-2.0.
 Affiliation: independent community project; not affiliated with or endorsed by OpenAI.
 
@@ -15,103 +17,119 @@ Affiliation: independent community project; not affiliated with or endorsed by O
 CAPABILITY != AUTHORITY
 ```
 
-Models/providers are proposal sources, never authority sources.
+OpenAI/model output is a proposal source, never an authority source.
 
-## Trust boundary
+## Provider invariant
+
+Do not introduce a generic provider abstraction.
+
+Allowed:
+- official OpenAI API only;
+- opaque `cred:openai.*` handles;
+- reviewed OpenAI model identifiers.
+
+Forbidden:
+- arbitrary model `base_url` or endpoint overrides;
+- Azure OpenAI;
+- Anthropic/Claude;
+- Google/Gemini;
+- xAI/Grok;
+- OpenRouter;
+- Bedrock;
+- Ollama/LM Studio/local model adapters;
+- third-party OpenAI-compatible endpoints;
+- ChatGPT browser cookies/session/access tokens as application credentials.
+
+## Primary platform invariant
+
+Target:
 
 ```text
-UNTRUSTED: model output, provider SDKs, webpages, files, OCR, clipboard, UI text, worker scripts
-TRUSTED:   Rust contracts -> policy -> approval verifier -> capability broker -> receipt builder
-HUMAN:     Ratatui TUI supplies/revokes authority; it does not bypass policy
+Ubuntu 26.04 LTS
+GNOME
+Wayland
 ```
 
-No provider may call an executor directly.
-No executor may accept a model object directly.
+Primary desktop access uses XDG Desktop Portal. Stable portal/compositor contracts are preferred over GNOME-private APIs and X11 tools.
 
-## Action lifecycle
+## Authority-instance invariant
+
+At most one non-denied `--execute` process may hold local authority for the current Ubuntu user session.
+
+Lock:
 
 ```text
-ProposedAction
-  -> normalize + reject raw-secret-shaped fields
-  -> Action (content-addressed, immutable through public API)
-  -> policy
-     -> deny
-     -> approval_required -> exact action_id verification
-     -> allow
-  -> executor or simulation
-  -> Receipt
+/run/user/<uid>/qsol-chatgpt-authority.lock
 ```
 
-Unknown action kinds MUST be denied.
-Effectful known actions MUST require approval unless a future policy explicitly narrows the rule.
-Approval MUST bind to the exact normalized `action_id`.
+The lock directory must match the expected `XDG_RUNTIME_DIR`, be owned by the current UID, and have no group/other permission bits. Existing/stale lock => fail closed.
 
-## Bootstrap capability classes
+This reduces local credential/session sharing risk. It does not claim to determine whether a credential was stolen or resold.
 
-Read-only policy-visible:
-- `screen.capture`
-- `filesystem.read`
+## Desktop observation
 
-Effectful policy-visible:
-- `shell.exec`
-- `input.click`
-- `input.type`
-- `app.launch`
-- `filesystem.write`
+`screen.capture`:
 
-Only `shell.exec` has a bootstrap executor. Real effects are disabled unless the local human explicitly starts the runtime with execution enabled.
+- accepts no model-controlled arguments;
+- accepts no credential handles;
+- is user/compositor mediated through `org.freedesktop.portal.Screenshot`;
+- accepts only a local `file://` portal result;
+- ingests at most 64 MiB;
+- currently accepts PNG only;
+- derives SHA-256, byte count, width and height;
+- serializes only `qsol-chatgpt-receipt/4` evidence;
+- never serializes screenshot URI/path/raw bytes;
+- stores raw screenshot bytes in a zeroizing buffer;
+- removes temporary `/run/user`, `/tmp`, or `/var/tmp` portal artifacts best-effort after ingestion.
 
-## Secret contract
+Continuous future visual observation MUST use XDG ScreenCast + PipeWire through a separately reviewed capability. Do not implement screenshot polling as an ersatz video stream.
 
-Raw secrets MUST NOT appear in:
-- action/proposal JSON;
+## Desktop APIs explicitly not used for the primary path
+
+- `gnome-screenshot` subprocess automation;
+- `xdotool`;
+- `wmctrl`;
+- X11 root capture;
+- GNOME Shell `Eval`;
+- private Mutter/GNOME Shell DBus APIs.
+
+## Receipt versions
+
+- process: `qsol-chatgpt-receipt/2`
+- OBS: `qsol-chatgpt-receipt/3`
+- desktop screenshot: `qsol-chatgpt-receipt/4`
+
+Existing v2/v3 semantics must not be weakened when extending v4.
+
+## Credential rules
+
+Raw credentials MUST NOT appear in:
+- proposal/action JSON;
 - action identity material;
-- approvals;
 - receipts;
 - logs;
-- TUI application state;
-- CLI arguments created by this project;
-- child-process environment by inheritance.
+- TUI state;
+- CLI arguments;
+- ambient environment-variable credential paths;
+- repository config/fixtures.
 
-Machine contracts refer to credentials only as opaque handles matching `cred:*`.
-In-process secret values use zeroizing storage and redacted `Debug` output.
-The bootstrap shell executor refuses actions that request credential handles; credential injection does not exist yet.
+Future OpenAI credential resolution uses an OS keyring/Secret Service broker at the last responsible moment.
 
-Rust memory safety MUST NOT be described as automatic secret erasure. Secret lifetime/zeroization is a separate requirement.
+## Rust / dependency rules
 
-## Shell contract
-
-`shell.exec` accepts structured `argv` only. No raw shell command-string contract exists.
-Shell interpreter `-c` escapes are denied.
-Privilege-escalation commands are denied.
-Child environment is cleared and replaced with a minimal fixed environment.
-Stdout/stderr are hashed and byte-counted for receipts, then zeroized; raw output is not persisted in receipts.
-
-## Rust rules
-
+- Rust MSRV: 1.87+.
 - `unsafe_code = "forbid"`.
-- authority-core public APIs expose immutable borrows, not mutable action internals;
-- avoid `unwrap`/`expect` in production and test targets;
-- provider/UI dependencies do not enter the policy kernel;
-- Python is an external worker language, never the trusted authority implementation.
-
-## Contract versions
-
-- proposal: `qsol-chatgpt-proposal/1`
-- normalized action: `qsol-chatgpt-action/2`
-- approval: `qsol-chatgpt-approval/2`
-- receipt: `qsol-chatgpt-receipt/2`
+- `ashpd` is used narrowly for XDG Screenshot portal support.
+- `tokio` exists only to drive async portal calls in this phase.
+- no provider/network SDK is introduced by the OpenAI-only configuration contract itself.
 
 ## Source-of-truth order
 
 1. executable Rust tests;
 2. Rust contracts/policy/runtime;
-3. JSON Schemas and canonical fixtures;
-4. architecture/security documentation;
-5. README prose.
+3. JSON Schemas;
+4. `AGENTS.md` security invariants;
+5. architecture/platform docs;
+6. README prose.
 
-When sources disagree, fail closed and repair the inconsistency.
-
-## Clean-room rule
-
-Do not copy, translate, mechanically reproduce, or derive implementation code from Noi, `lencx/ChatGPT`, or other third-party desktop AI wrappers. Independently implement general concepts from standards and public architectural ideas. Record third-party dependencies and licenses in provenance documentation.
+On disagreement, fail closed and repair the inconsistency.

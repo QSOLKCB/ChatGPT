@@ -4,7 +4,8 @@
   "title": "QSOL ChatGPT Receipt",
   "oneOf": [
     {"$ref": "#/$defs/process_receipt_v2"},
-    {"$ref": "#/$defs/obs_receipt_v3"}
+    {"$ref": "#/$defs/obs_receipt_v3"},
+    {"$ref": "#/$defs/desktop_receipt_v4"}
   ],
   "$defs": {
     "process_receipt_v2": {
@@ -133,6 +134,33 @@
                 }
               ]
             }
+          }
+        },
+        "error_code": {"type": "string", "minLength": 1}
+      }
+    },
+    "desktop_receipt_v4": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "receipt_id", "action_id", "kind", "decision", "status"],
+      "properties": {
+        "schema_version": {"const": "qsol-chatgpt-receipt/4"},
+        "receipt_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "action_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "kind": {"const": "screen.capture"},
+        "decision": {"enum": ["allow", "deny"]},
+        "status": {"enum": ["denied", "simulated", "completed", "failed", "unsupported"]},
+        "desktop_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["backend", "image_sha256", "image_bytes", "width", "height", "image_format"],
+          "properties": {
+            "backend": {"const": "xdg_desktop_portal_screenshot"},
+            "image_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "image_bytes": {"type": "integer", "minimum": 1, "maximum": 67108864},
+            "width": {"type": "integer", "minimum": 1},
+            "height": {"type": "integer", "minimum": 1},
+            "image_format": {"const": "png"}
           }
         },
         "error_code": {"type": "string", "minLength": 1}

@@ -22,7 +22,8 @@ pub struct PolicyDecision {
 
 pub fn evaluate(action: &Action) -> PolicyDecision {
     match action.kind() {
-        "screen.capture" | "filesystem.read" => PolicyDecision {
+        "screen.capture" => screen_capture_policy(action),
+        "filesystem.read" => PolicyDecision {
             disposition: Disposition::Allow,
             code: "read_only_capability",
             reason: "known read-only capability",
@@ -50,6 +51,26 @@ pub fn evaluate(action: &Action) -> PolicyDecision {
             code: "unknown_capability",
             reason: "unknown action kinds fail closed",
         },
+    }
+}
+
+fn screen_capture_policy(action: &Action) -> PolicyDecision {
+    if !action.args().is_empty() {
+        return deny(
+            "screen_capture_arguments_forbidden",
+            "Ubuntu portal screenshot capture accepts no model-controlled arguments",
+        );
+    }
+    if !action.credential_handles().is_empty() {
+        return deny(
+            "screen_capture_credentials_forbidden",
+            "desktop observation never receives credential handles",
+        );
+    }
+    PolicyDecision {
+        disposition: Disposition::Allow,
+        code: "desktop_observation",
+        reason: "one-shot Ubuntu Wayland screenshot capture is user-mediated by XDG Desktop Portal",
     }
 }
 
@@ -243,6 +264,24 @@ mod tests {
             Ok(value) => value,
             Err(error) => panic!("fixture must normalize: {error}"),
         }
+    }
+
+    #[test]
+    fn screen_capture_is_narrow_and_credential_free() {
+        let capture = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.capture"}"#,
+        );
+        assert_eq!(evaluate(&capture).disposition, Disposition::Allow);
+
+        let with_args = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.capture","args":{"target":"all"}}"#,
+        );
+        assert_eq!(evaluate(&with_args).disposition, Disposition::Deny);
+
+        let with_credential = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.capture","credential_handles":["cred:openai.default"]}"#,
+        );
+        assert_eq!(evaluate(&with_credential).disposition, Disposition::Deny);
     }
 
     #[test]

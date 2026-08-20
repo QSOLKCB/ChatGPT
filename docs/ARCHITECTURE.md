@@ -5,100 +5,120 @@
 ```text
                          HUMAN
                            |
-                           v
-                    +--------------+
+                    +------+-------+
                     | Ratatui TUI  |
                     | control plane|
                     +------+-------+
                            |
                     grant / revoke
                            |
-UNTRUSTED                  v                         EFFECTS
-model/provider ---> ProposedAction ---> +--------------------------+
-                                       | Rust authority core       |
-                                       | normalize -> policy       |
-                                       | -> approval -> dispatch   |
-                                       +-----+---------------+-----+
-                                             |               |
-                                             v               v
-                                       secret broker     capability adapter
-                                             |               |
-                                             |               v
-                                             |          host / sandbox
-                                             |               |
-                                             +-------+-------+
-                                                     v
-                                                  Receipt
+                           v
+OpenAI proposal ---> Rust authority core ---> capability broker ---> Ubuntu 26.04 / OBS
+                           |                        |
+                           |                        +-> XDG Screenshot portal
+                           |                        +-> OBS loopback WebSocket
+                           |                        +-> bounded process executor
+                           |
+                           +-> single-instance guard
+                           +-> secret broker
+                           +-> deterministic receipts
 ```
 
-The model is a proposal source, not an authority source. The TUI is a human control plane, not a bypass around runtime policy.
+The OpenAI model is a proposal source, not an authority source. The TUI is a human control plane, not a bypass around runtime policy.
 
 ## Trusted computing base
 
-The intended trusted core is deliberately small:
+The intended trusted core remains small:
 - `contracts.rs`
 - `policy.rs`
 - `runtime.rs`
 - `receipts.rs`
 - `secrets.rs`
-- capability-specific brokers/executors
+- `instance.rs`
+- capability-specific brokers/executors.
 
-Provider SDKs, model clients, browser automation, media tools, Python workers, webpages, clipboard contents, OCR, downloaded files, and model output are outside the trust boundary.
+Provider/model output, webpages, clipboard contents, OCR, downloaded files, Python workers, and future browser automation are outside the trust boundary.
 
-## Proposal vs normalized action
+## OpenAI-only provider architecture
 
-Untrusted JSON enters as `ProposedAction`. Normalization validates contract version, rejects raw-secret-shaped fields, validates/deduplicates credential handles, and derives a content identity. The resulting `Action` exposes only immutable borrows through its public API.
+There is deliberately no generic provider registry.
 
-This removes the Python prototype failure mode where a mutable dictionary could theoretically change after identity/approval calculation.
+```text
+OpenAIConfig
+  credential: cred:openai.*
+  model:      reviewed identifier
+  origin:     https://api.openai.com   (compile-time fixed)
+```
 
-## Policy and approval
+No arbitrary provider host/base URL exists in the configuration type. See `docs/OPENAI_ONLY.md`.
 
-Policy returns one of:
-- `allow`;
-- `approval_required`;
-- `deny`.
+## Single authority process
 
-Unknown capabilities deny by default. An approval authorizes exactly one normalized `action_id`; action substitution therefore changes identity and invalidates the approval.
+Effectful execution acquires an atomic local lock under validated `/run/user/<uid>`. Multiple TUI/client views may eventually talk to one authority daemon, but multiple independent executors/credential brokers are not permitted for the same user session.
 
-Future approvals add session binding, nonces, expiry and signatures.
+## Ubuntu 26.04 desktop observation
+
+The primary desktop stack is GNOME Wayland.
+
+One-shot observation:
+
+```text
+screen.capture
+   -> policy validates empty args / no credentials
+   -> XDG Desktop Portal Screenshot
+   -> local file URI validation
+   -> bounded PNG ingestion
+   -> SHA-256 + dimensions
+   -> desktop receipt v4
+   -> raw bytes zeroized
+```
+
+The screenshot URI/path and raw pixels are not audit fields.
+
+Continuous future observation should use XDG ScreenCast + PipeWire. The project does not treat repeated screenshot polling as a substitute for a real bounded stream broker.
+
+Window enumeration, active-window metadata, and cursor metadata remain unimplemented until a stable Ubuntu/GNOME/Wayland contract is selected. The project will not silently adopt GNOME-private APIs to make roadmap checkboxes turn green.
 
 ## Capability executors
 
-Executors receive normalized actions only after policy/approval gates. The bootstrap shell executor:
-- accepts structured argv only;
-- denies shell-interpreter `-c` escapes at policy level;
-- clears inherited environment;
-- injects no credentials;
-- records output hashes/sizes rather than raw output;
-- zeroizes captured stdout/stderr buffers after hashing.
+Executors receive normalized actions only after policy/approval gates.
 
-Network/filesystem/process isolation remains incomplete, so real execution is explicitly a developer bootstrap capability rather than a production sandbox.
+Current structured adapters:
+- shell/process executor;
+- OBS loopback broker;
+- XDG Screenshot portal observation.
+
+Future input injection must remain behind a separate broker and portal/compositor authority boundary.
+
+## Receipts
+
+Receipt families are versioned by capability semantics:
+- v2 process evidence;
+- v3 OBS evidence;
+- v4 desktop screenshot evidence.
+
+Adding a new receipt family must not loosen older schema branches.
 
 ## Credentials
 
-Machine-visible contracts contain only opaque `CredentialHandle` values. Secret values live in a non-serializable broker/store. A provider or executor receives a secret only through a future narrowly scoped broker operation.
+Machine-visible contracts contain only opaque credential handles. Secret values live in non-serializable broker storage.
 
-The TUI never owns or renders raw secret values.
-
-## Why a TUI first
-
-The authority console needs reliability and inspectability more than decorative chrome. Ratatui provides a small local control surface that works in terminals and remote shells while keeping the GUI/toolkit attack surface outside the authority kernel.
-
-Future GUI frontends may speak a narrow local protocol to the same Rust core.
+Future OpenAI credential storage/resolution uses Ubuntu Secret Service / OS keyring. ChatGPT browser cookies/session tokens and ambient `OPENAI_API_KEY`-style environment sourcing are outside the credential contract.
 
 ## Dependency direction
 
 ```text
-frontends/providers/workers
+OpenAI adapter / TUI / workers
           |
           v
    proposal interface
           |
           v
- contracts -> policy -> runtime -> capability broker -> OS/sandbox
+ contracts -> policy -> runtime -> capability brokers -> OS/OBS
                         |
                         +-> receipt/audit
                         +-> secret broker
+                        +-> instance guard
 ```
 
-No arrow points from the policy core upward into a provider SDK.
+No arrow points from policy upward into an OpenAI SDK or arbitrary provider interface.

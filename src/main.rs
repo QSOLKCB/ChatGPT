@@ -12,7 +12,7 @@ use zeroize::Zeroize;
 const MAX_OBS_PASSWORD_BYTES: usize = 4096;
 
 #[derive(Parser)]
-#[command(name = "qsol-chatgpt", version, about = "Linux-native AI capability broker")]
+#[command(name = "qsol-chatgpt", version, about = "Linux-native OpenAI capability broker")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -51,13 +51,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         } => {
             let action = parse_action(&action)?;
             let approval = approve.then(|| Approval::allow_once(&action, "local-human"));
-            let runtime = if needs_obs_runtime(&action, execute) {
-                let (config, secrets) = obs_runtime_config(&action, obs_password_stdin)?;
-                Runtime::effectful_with_obs(config, secrets)
-            } else if execute {
-                Runtime::effectful()
-            } else {
+            let decision = policy::evaluate(&action);
+            let runtime = if !execute || decision.disposition == Disposition::Deny {
                 Runtime::simulated()
+            } else if needs_obs_runtime(&action, execute) {
+                let (config, secrets) = obs_runtime_config(&action, obs_password_stdin)?;
+                Runtime::effectful_with_obs(config, secrets)?
+            } else {
+                Runtime::effectful()?
             };
             let receipt = runtime.run(&action, approval.as_ref())?;
             println!("{}", serde_json::to_string_pretty(&receipt)?);

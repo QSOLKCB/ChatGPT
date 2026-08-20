@@ -1,0 +1,79 @@
+# AGENTS.md
+
+MACHINE-ORIENTED CONTRIBUTOR INSTRUCTIONS.
+
+## Mission
+
+Maintain a small, auditable Rust authority core for a Linux-native AI workstation. Models propose. Rust decides authority. Humans retain revocation.
+
+## Non-negotiable invariants
+
+1. `CAPABILITY != AUTHORITY`.
+2. Unknown capabilities fail closed.
+3. Effectful actions require explicit authority.
+4. Approval binds to one exact normalized `action_id`.
+5. The public `Action` API must not expose mutable action internals after identity calculation.
+6. `unsafe` Rust is forbidden in the trusted core.
+7. Raw secrets never enter proposals, actions, approvals, receipts, logs, TUI state, or inherited subprocess environments.
+8. Credential references are opaque handles, never secret values.
+9. Secret values use explicit zeroizing storage; memory safety is not treated as secret erasure.
+10. Provider adapters never call OS executors directly.
+11. The model never talks directly to OS input APIs.
+12. Shell execution uses argv arrays, never an implicit shell string.
+13. Shell interpreter `-c` escape paths remain denied unless a future reviewed capability explicitly defines them.
+14. Real execution remains opt-in until sandbox gates in `ROADMAP.md` are satisfied.
+15. Do not weaken negative tests to make a capability pass.
+
+## Language boundary
+
+Rust owns:
+- contracts;
+- policy;
+- approvals;
+- credential broker;
+- capability dispatch;
+- receipts/audit;
+- process supervision;
+- TUI authority state.
+
+Python or other languages may implement workers for media, science, automation, data analysis, or generated tasks. Workers receive only brokered capabilities and scoped inputs.
+
+## Clean-room provenance
+
+Do not copy or port source from Noi, `lencx/ChatGPT`, or other desktop AI wrappers. Do not translate unlicensed source code into Rust. General architecture, standards, documented OS APIs, and independently designed interfaces are allowed.
+
+## Dependency discipline
+
+Before adding a dependency:
+- verify its license is compatible;
+- state why the standard library/current dependency set is insufficient;
+- keep provider, UI, media, and browser dependencies outside the policy kernel where possible;
+- avoid dependencies that require `unsafe` in this repository's own code path without an explicit security review.
+
+## Required checks
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
+```
+
+Tests must not require network access, real credentials, desktop injection, or privileged host mutation.
+
+## Security review triggers
+
+Require explicit security review for changes that add or broaden:
+- shell/process execution;
+- filesystem writes/deletes;
+- network access;
+- credential exposure/injection;
+- browser sessions/cookies;
+- clipboard access;
+- desktop capture;
+- keyboard/mouse injection;
+- background persistence;
+- privilege changes;
+- autonomous loops;
+- remote control;
+- approval scope/reuse;
+- receipt redaction rules.

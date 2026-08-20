@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/QSOLKCB/ChatGPT/schemas/action.schema.json",
+  "title": "QSOL ChatGPT Normalized Action",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "action_id", "kind", "args", "requested_by", "credential_handles"],
+  "properties": {
+    "schema_version": {"const": "qsol-chatgpt-action/2"},
+    "action_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "kind": {"type": "string", "minLength": 1, "maxLength": 128},
+    "args": {"type": "object"},
+    "requested_by": {"type": "string", "minLength": 1, "maxLength": 256},
+    "credential_handles": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^cred:[A-Za-z0-9._:-]+$"}
+    }
+  }
+}

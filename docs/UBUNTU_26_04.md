@@ -2,8 +2,6 @@
 
 ## Primary platform
 
-The primary desktop target is:
-
 ```text
 Ubuntu 26.04 LTS
 GNOME
@@ -18,27 +16,30 @@ The project optimizes the computer-use foundation for the security model and des
 
 Use the standard XDG Desktop Portal Screenshot interface through `ashpd`.
 
-The portal remains the authority boundary for desktop capture. The application does not bypass the user/compositor permission path.
-
-The synchronous Rust capability API runs the async portal exchange on a dedicated worker thread with its own Tokio runtime. This avoids nesting `block_on` inside an existing Tokio executor when the library is called from async applications.
+The portal remains the authority boundary for desktop capture. The application does not bypass user/compositor permission paths. The synchronous Rust capability API performs the async portal exchange on a dedicated worker thread so callers already inside Tokio cannot trigger nested-runtime panics.
 
 ### Sustained visual observation
 
-Future continuous computer vision should use:
+PR #4 implements the Ubuntu-native sustained path:
 
 ```text
-XDG ScreenCast portal
-        -> user-mediated source selection
-        -> PipeWire node
-        -> bounded frame broker
-        -> OpenAI observation path
+screen.observe
+        -> exact frame/duration bounds
+        -> exact human approval
+        -> XDG ScreenCast portal
+        -> user-mediated monitor/window selection
+        -> PipeWire remote + node
+        -> bounded mapped-frame hashing
+        -> receipt/5
 ```
 
-This avoids repeatedly invoking one-shot screenshot dialogs and preserves Wayland's explicit capture authority model.
+The ScreenCast grant is non-persistent. The broker uses `PersistMode::DoNot`, does not retain restore tokens, selects one source, and does not expose the PipeWire node/FD outside the adapter.
+
+Frame payload is hashed directly from mapped PipeWire buffers. Raw video is not accumulated into an application-owned recording and is not forwarded to OpenAI in this phase.
 
 ## Deliberately avoided primary paths
 
-PR #3 does not use:
+The Ubuntu primary path does not use:
 
 - `gnome-screenshot` subprocess automation;
 - `scrot` / ImageMagick screen scraping;
@@ -50,29 +51,37 @@ PR #3 does not use:
 - extension injection;
 - direct compositor bypasses.
 
-These are either brittle, X11-centric, private, or weaker authority boundaries than portals on GNOME Wayland.
+These are brittle, X11-centric, private, or weaker authority boundaries than portals on GNOME Wayland.
 
-## Window and cursor metadata
+## Window, source, and cursor metadata
 
-Global window enumeration, active-window discovery, and cursor location are **not fabricated** when the platform does not expose a stable cross-application portal contract for them.
+ScreenCast receipts may record the selected source category and compositor position/displayed-size metadata supplied by the portal. They do not store source/window names.
 
-Those roadmap items remain open until they can be implemented through a stable, reviewable Ubuntu/GNOME/Wayland API without depending on private shell internals.
+Global window enumeration and active-window discovery are **not fabricated** when the platform lacks a stable cross-application portal contract. Cursor capture remains hidden for `screen.observe` in PR #4. Richer cursor metadata requires a separately reviewed stable contract.
 
-## Raw screenshot handling
+## Raw visual-data handling
 
-A screenshot can contain passwords, private messages, API keys, browser sessions, personal files, or other sensitive material even when the capture operation itself is read-only.
+A screenshot or video frame can contain passwords, private messages, API keys, browser sessions, personal files, or other sensitive material even when capture itself is read-only.
 
 Therefore:
 
-- screenshot bytes are treated as ephemeral sensitive data;
-- raw bytes are never serialized into receipts or logs;
-- the audit record stores content hash, byte size, dimensions, backend identity, and image format only;
-- the file size is verified before allocation and screenshot bytes are read into one pre-sized zeroizing allocation, avoiding growth reallocations that could leave frame fragments in freed heap memory;
-- the complete PNG chunk stream is validated through `IEND`, including chunk CRCs, before a capture can be recorded as completed;
-- the portal artifact path/URI is never written into the receipt;
-- parent-directory URI components are rejected;
-- best-effort cleanup canonicalizes the portal path and only unlinks regular files that remain beneath canonical `/tmp`, `/var/tmp`, or the validated `/run/user/<uid>` runtime directory;
-- symlink or traversal targets outside those approved roots are never deleted by cleanup.
+- raw screenshot/frame data is treated as ephemeral sensitive material;
+- raw pixels are never serialized into receipts or logs;
+- one-shot screenshots use pre-sized zeroizing buffers and complete PNG validation;
+- ScreenCast buffers are hashed in place rather than copied into a growing frame archive;
+- screenshot paths/URIs are never written into receipts;
+- ScreenCast receipts omit PipeWire FD/node IDs, portal object paths, restore tokens, and source titles;
+- OpenAI image forwarding remains disabled until redaction, credential, bounded request, and egress gates are complete.
+
+## System build dependency
+
+PipeWire Rust bindings link to Ubuntu's PipeWire development libraries:
+
+```bash
+sudo apt install libpipewire-0.3-dev
+```
+
+CI installs this package explicitly.
 
 ## X11 compatibility
 

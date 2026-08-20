@@ -24,7 +24,7 @@ The roadmap is ordered by **authority risk**, not demo appeal.
 - [x] Add zeroizing secret-store primitive and redacted debug output.
 - [x] Reject common raw-secret-shaped action fields.
 - [x] Refuse shell credential injection until a broker exists.
-- [x] Add Rust tests and `fmt`/`clippy`/`test` CI.
+- [x] Add Rust tests and strict `fmt`/`clippy`/`test` CI.
 
 ## Phase 0B — OBS structured application control
 
@@ -49,7 +49,7 @@ The roadmap is ordered by **authority risk**, not demo appeal.
 - [ ] Add offline replay verifier that performs no effects.
 - [ ] Add argument-size and nesting limits.
 - [ ] Add output-size limits before allocation growth becomes attacker-controlled.
-- [ ] Add bounded execution time.
+- [ ] Add bounded shell execution time.
 - [ ] Add process-group/tree termination.
 - [ ] Add explicit executable allowlists and executable identity receipts.
 - [ ] Add working-directory capability roots.
@@ -86,32 +86,51 @@ The OpenAI adapter receives only the minimum credential material for the immedia
 
 Primary environment: Ubuntu 26.04 LTS + GNOME + Wayland.
 
+### One-shot observation
+
 - [x] Abstract screenshot backend behind an internal Rust trait.
 - [x] Add Wayland-first one-shot screenshot capture through XDG Desktop Portal.
 - [x] Refuse model-controlled screenshot arguments and credential handles.
 - [x] Validate portal result as a local `file://` URI.
 - [x] Bound screenshot ingestion to 64 MiB.
-- [x] Require/validate PNG for the first Ubuntu backend.
+- [x] Validate complete PNG structure/CRCs through IEND.
 - [x] Hash screenshot identity and record dimensions without raw bytes/path.
-- [x] Zeroize raw screenshot buffers after evidence derivation.
+- [x] Read into one pre-sized zeroizing buffer.
+- [x] Add safe canonicalized portal-artifact cleanup.
 - [x] Add desktop receipt v4 while preserving receipt v2/v3 semantics.
 - [x] Add synthetic desktop fixtures.
-- [ ] Add screenshot redaction hooks before OpenAI image forwarding.
-- [ ] Add XDG ScreenCast session broker.
-- [ ] Add PipeWire bounded frame ingestion for sustained visual observation.
-- [ ] Add multi-monitor/source geometry from ScreenCast stream metadata.
+
+### Sustained visual observation — PR #4
+
+- [x] Add `screen.observe` capability with exact action-bound `max_frames` and `max_duration_ms`.
+- [x] Require exact human approval for sustained observation.
+- [x] Add XDG ScreenCast session broker.
+- [x] Keep source selection user-mediated by the portal.
+- [x] Allow one selected monitor or window per observation session.
+- [x] Use `PersistMode::DoNot` and retain no restore token.
+- [x] Open the portal-provided PipeWire remote and selected node through safe Rust bindings.
+- [x] Negotiate bounded raw-video formats/dimensions/framerate.
+- [x] Hash mapped PipeWire frame payload in place without building a raw-frame archive.
+- [x] Add per-frame payload bound and total frame-count/duration bounds.
+- [x] Derive an order-sensitive frame-chain SHA-256 audit identity.
+- [x] Capture selected-source geometry metadata when the portal provides it.
+- [x] Publish ScreenCast receipt v5 without raw pixels, node IDs, restore tokens, or source names.
+- [x] Add synthetic contract/frame-chain tests that require no live portal or PipeWire server.
+- [ ] Add screenshot/frame redaction hooks before any OpenAI image forwarding.
+- [ ] Add multi-source/multi-monitor ScreenCast sessions only after separate authority and UI review.
 - [ ] Add stable active-window/window metadata only if Ubuntu exposes a suitable reviewed contract.
 - [ ] Add cursor metadata only through a stable reviewed contract.
 - [ ] Add X11 compatibility adapter only if useful; never silently downgrade Wayland security.
 
 ### Phase 3 gate
 
-One-shot portal capture may produce hash-only audit evidence. Raw frames must not be forwarded to OpenAI until redaction policy, bounded OpenAI image request handling, and credential/network gates are implemented.
+Local one-shot and bounded sustained observation may produce hash-only audit evidence. **Raw screenshots and ScreenCast frames must not be forwarded to OpenAI** until redaction policy, bounded OpenAI image requests, Ubuntu Secret Service credentials, and explicit `api.openai.com` egress are implemented.
 
 ## Phase 4 — Controlled computer use
 
 - [ ] Add input capability broker.
 - [ ] Use XDG RemoteDesktop/InputCapture-style authority boundaries where appropriate on GNOME Wayland.
+- [ ] Keep observation grants separate from keyboard/mouse grants.
 - [ ] Click action with target geometry receipt.
 - [ ] Text input action.
 - [ ] Key/chord action.
@@ -119,7 +138,7 @@ One-shot portal capture may produce hash-only audit evidence. Raw frames must no
 - [ ] Per-application allowlists.
 - [ ] Sensitive UI classification and human confirmation.
 - [ ] Rate limits and action budgets.
-- [ ] Emergency stop that kills active effectors/process trees/sessions.
+- [ ] Emergency stop that kills active effectors/process trees/portal sessions.
 - [ ] Prompt-injection boundary tests.
 
 ### Phase 4 gate
@@ -151,24 +170,62 @@ OpenAI never talks directly to OS input APIs. Every effect passes through the Ru
 - [ ] Python worker adapter for bounded media/scientific tasks.
 - [ ] Prefer safer deterministic CLI/API routes over GUI automation unless requested.
 
-## Phase 7 — OpenAI agent orchestration
+## Phase 7 — Audio and voice broker
+
+Goal: let ChatGPT hear and speak without collapsing microphone, playback, recording, and broadcast authority into one permission.
+
+- [ ] Add PipeWire audio backend abstraction.
+- [ ] Add `audio.mic.observe` with explicit, revocable microphone authority.
+- [ ] Add `audio.voice.speak` for assistant audio output.
+- [ ] Add `audio.session.start` / `audio.session.stop` bounded voice-session lifecycle.
+- [ ] Create dedicated virtual assistant playback endpoint where supported.
+- [ ] Keep microphone, assistant voice, desktop audio, and recording authority separate.
+- [ ] Add bounded audio buffers and no raw audio in receipts.
+- [ ] Add transcript/event timeline with content hashes and timing references.
+- [ ] Add voice-session privacy indicator and TUI kill control.
+- [ ] Integrate only official OpenAI voice/realtime APIs after credential/egress gates pass.
+
+### Phase 7 gate
+
+Microphone permission does not imply recording permission. Speaking permission does not imply microphone permission. Neither implies streaming/broadcast permission.
+
+## Phase 8 — OBS conversational recording / AI co-host
+
+Goal: allow ChatGPT to join a user-authorized OBS recording as a voice participant while preserving separate audio tracks and OBS authority boundaries.
+
+- [ ] Route assistant voice into a dedicated OBS audio input.
+- [ ] Route user microphone separately from assistant voice.
+- [ ] Preserve desktop/application audio as a separate route where practical.
+- [ ] Support OBS recording manifests with scene timeline and audio-route identities.
+- [ ] Verify OBS recording state before/after conversational sessions.
+- [ ] Allow approved scene changes during a recording without granting raw OBS request access.
+- [ ] Correlate transcript events with OBS recording timeline.
+- [ ] Produce post-session recording + transcript + receipt bundle.
+- [ ] Keep `obs.stream.start` denied until a stronger explicit public-broadcast approval class exists.
+- [ ] Never infer permission to broadcast from permission to record locally.
+
+## Phase 9 — OpenAI conversational workstation
+
+Goal: combine bounded voice, vision, structured application control, and computer use behind one authority daemon rather than multiple independent ChatGPT processes.
 
 - [ ] Bounded OpenAI observe/decide/act loop.
-- [ ] Per-session action budgets.
+- [ ] Synchronize voice-session, ScreenCast, OBS, and input capability state.
+- [ ] Per-session action/time/token budgets.
 - [ ] Loop-stall detection.
 - [ ] Repeated-action suppression.
 - [ ] Human checkpoint protocol.
 - [ ] Long-task resumable state.
-- [ ] Multiple specialized roles may share one local authority daemon, but must not create multiple authority-bearing processes or provider credentials.
+- [ ] Multiple specialized OpenAI roles may share one local authority daemon but never create independent machine-authority leases or credential stores.
+- [ ] Conversation-aware emergency revoke-all across voice, vision, OBS, browser, shell, and input sessions.
 
-## Phase 8 — Isolation and release engineering
+## Phase 10 — Isolation and release engineering
 
 - [ ] Linux namespaces/container sandbox profile.
 - [ ] Optional disposable VM backend.
 - [ ] cgroup resource controls.
 - [ ] seccomp policy where justified.
 - [ ] Reproducible package build for Ubuntu 26.04 LTS.
-- [ ] Dependency/license inventory.
+- [ ] Deterministic dependency lockfile and license inventory.
 - [ ] SBOM generation.
 - [ ] Signed release artifacts.
 - [ ] Independent threat-model review before v1.0.
@@ -178,10 +235,11 @@ OpenAI never talks directly to OS input APIs. Every effect passes through the Ru
 - unrestricted autonomous root access;
 - stealth or persistence mechanisms;
 - bypassing OS portal/security prompts;
-- silently approving financial, legal, broadcast-start, or external-account actions;
+- silently approving financial, legal, public-broadcast, or external-account actions;
 - raw-token storage or credential harvesting;
 - ChatGPT web-session-cookie automation;
 - multi-provider support;
 - arbitrary OpenAI-compatible model endpoints;
 - multiple independent authority-bearing application instances for one user session;
+- treating microphone, recording, and broadcast as one permission;
 - pretending GUI automation is deterministic when it is not.

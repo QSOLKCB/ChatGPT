@@ -9,5 +9,6 @@ pub mod openai;
 pub mod policy;
 pub mod receipts;
 pub mod runtime;
+mod screencast;
 pub mod secrets;
 pub mod tui;

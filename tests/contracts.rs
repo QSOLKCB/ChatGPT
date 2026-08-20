@@ -31,18 +31,12 @@ fn assert_declared_object_shape(value: &Value, schema: &Value) {
     };
     if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
         for key in object.keys() {
-            assert!(
-                properties.contains_key(key),
-                "undeclared property in representative receipt: {key}"
-            );
+            assert!(properties.contains_key(key), "undeclared property in representative receipt: {key}");
         }
     }
     if let Some(required) = schema.get("required").and_then(Value::as_array) {
         for key in required.iter().filter_map(Value::as_str) {
-            assert!(
-                object.contains_key(key),
-                "missing required representative property: {key}"
-            );
+            assert!(object.contains_key(key), "missing required representative property: {key}");
         }
     }
 }
@@ -60,37 +54,21 @@ fn action(json: &str) -> qsol_chatgpt::contracts::Action {
 
 #[test]
 fn machine_schemas_are_valid_json() {
-    for name in [
-        "proposal.schema.json",
-        "action.schema.json",
-        "approval.schema.json",
-        "receipt.schema.json",
-    ] {
+    for name in ["proposal.schema.json", "action.schema.json", "approval.schema.json", "receipt.schema.json"] {
         let _ = read_schema(name);
     }
 }
 
 #[test]
 fn published_receipt_schema_accepts_representative_obs_v3_shape() {
-    let action = action(
-        r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.current","args":{"obs_port":4455}}"#,
-    );
+    let action = action(r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.current","args":{"obs_port":4455}}"#);
     let evidence = ObsEvidence {
         request_type: "GetCurrentProgramScene".to_owned(),
         response_sha256: "a".repeat(64),
         response_bytes: 128,
-        observation: ObsObservation::CurrentScene {
-            scene_name_sha256: "b".repeat(64),
-            scene_name_bytes: 7,
-        },
+        observation: ObsObservation::CurrentScene { scene_name_sha256: "b".repeat(64), scene_name_bytes: 7 },
     };
-    let receipt = match Receipt::new_obs(
-        &action,
-        Disposition::Allow,
-        ReceiptStatus::Completed,
-        Some(evidence),
-        None,
-    ) {
+    let receipt = match Receipt::new_obs(&action, Disposition::Allow, ReceiptStatus::Completed, Some(evidence), None) {
         Ok(value) => value,
         Err(error) => panic!("receipt construction failed: {error}"),
     };
@@ -98,123 +76,59 @@ fn published_receipt_schema_accepts_representative_obs_v3_shape() {
         Ok(value) => value,
         Err(error) => panic!("receipt serialization failed: {error}"),
     };
-
     let schema = read_schema("receipt.schema.json");
-    let v3 = match schema
-        .get("$defs")
-        .and_then(|value| value.get("obs_receipt_v3"))
-    {
-        Some(value) => value,
-        None => panic!("receipt schema must publish obs_receipt_v3"),
-    };
-    assert_eq!(
-        serialized.get("schema_version").and_then(Value::as_str),
-        Some("qsol-chatgpt-receipt/3")
-    );
+    let v3 = schema.get("$defs").and_then(|value| value.get("obs_receipt_v3")).unwrap_or_else(|| panic!("receipt schema must publish obs_receipt_v3"));
     assert_declared_object_shape(&serialized, v3);
-
-    let obs_evidence = match serialized.get("obs_evidence") {
-        Some(value) => value,
-        None => panic!("representative OBS receipt must contain obs_evidence"),
-    };
-    let obs_evidence_schema = match v3
-        .get("properties")
-        .and_then(|value| value.get("obs_evidence"))
-    {
-        Some(value) => value,
-        None => panic!("v3 schema must declare obs_evidence"),
-    };
+    let obs_evidence = serialized.get("obs_evidence").unwrap_or_else(|| panic!("representative OBS receipt must contain obs_evidence"));
+    let obs_evidence_schema = v3.get("properties").and_then(|value| value.get("obs_evidence")).unwrap_or_else(|| panic!("v3 schema must declare obs_evidence"));
     assert_declared_object_shape(obs_evidence, obs_evidence_schema);
-
-    let observation = match obs_evidence.get("observation") {
-        Some(value) => value,
-        None => panic!("representative OBS evidence must contain observation"),
-    };
-    let observation_type = match observation.get("observation_type").and_then(Value::as_str) {
-        Some(value) => value,
-        None => panic!("representative observation must contain observation_type"),
-    };
-    let observation_branches = match obs_evidence_schema
-        .get("properties")
-        .and_then(|value| value.get("observation"))
-        .and_then(|value| value.get("oneOf"))
-        .and_then(Value::as_array)
-    {
-        Some(value) => value,
-        None => panic!("v3 schema must publish typed observation branches"),
-    };
-    let matching_branch = observation_branches.iter().find(|branch| {
-        branch
-            .get("properties")
-            .and_then(|value| value.get("observation_type"))
-            .and_then(|value| value.get("const"))
-            .and_then(Value::as_str)
-            == Some(observation_type)
-    });
-    match matching_branch {
-        Some(branch) => assert_declared_object_shape(observation, branch),
-        None => panic!("representative observation type is not published by the v3 schema"),
-    }
+    let observation = obs_evidence.get("observation").unwrap_or_else(|| panic!("representative OBS evidence must contain observation"));
+    let observation_type = observation.get("observation_type").and_then(Value::as_str).unwrap_or_else(|| panic!("representative observation must contain observation_type"));
+    let observation_branches = obs_evidence_schema.get("properties").and_then(|value| value.get("observation")).and_then(|value| value.get("oneOf")).and_then(Value::as_array).unwrap_or_else(|| panic!("v3 schema must publish typed observation branches"));
+    let matching_branch = observation_branches.iter().find(|branch| branch.get("properties").and_then(|value| value.get("observation_type")).and_then(|value| value.get("const")).and_then(Value::as_str) == Some(observation_type));
+    match matching_branch { Some(branch) => assert_declared_object_shape(observation, branch), None => panic!("representative observation type is not published by the v3 schema") }
 }
 
 #[test]
 fn published_receipt_schema_accepts_representative_desktop_v4_shape() {
     let serialized = json!({
-        "schema_version": "qsol-chatgpt-receipt/4",
-        "receipt_id": "d".repeat(64),
-        "action_id": "e".repeat(64),
-        "kind": "screen.capture",
-        "decision": "allow",
-        "status": "completed",
-        "desktop_evidence": {
-            "backend": "xdg_desktop_portal_screenshot",
-            "image_sha256": "c".repeat(64),
-            "image_bytes": 68,
-            "width": 1,
-            "height": 1,
-            "image_format": "png"
+        "schema_version": "qsol-chatgpt-receipt/4", "receipt_id": "d".repeat(64), "action_id": "e".repeat(64), "kind": "screen.capture", "decision": "allow", "status": "completed",
+        "desktop_evidence": {"backend": "xdg_desktop_portal_screenshot", "image_sha256": "c".repeat(64), "image_bytes": 68, "width": 1, "height": 1, "image_format": "png"}
+    });
+    let schema = read_schema("receipt.schema.json");
+    let v4 = schema.get("$defs").and_then(|value| value.get("desktop_receipt_v4")).unwrap_or_else(|| panic!("receipt schema must publish desktop_receipt_v4"));
+    assert_declared_object_shape(&serialized, v4);
+    let evidence = serialized.get("desktop_evidence").unwrap_or_else(|| panic!("desktop receipt must contain desktop_evidence"));
+    let evidence_schema = v4.get("properties").and_then(|value| value.get("desktop_evidence")).unwrap_or_else(|| panic!("v4 schema must declare desktop_evidence"));
+    assert_declared_object_shape(evidence, evidence_schema);
+}
+
+#[test]
+fn published_receipt_schema_accepts_representative_screencast_v5_shape() {
+    let serialized = json!({
+        "schema_version": "qsol-chatgpt-receipt/5", "receipt_id": "1".repeat(64), "action_id": "2".repeat(64), "kind": "screen.observe", "decision": "approval_required", "status": "completed",
+        "screencast_evidence": {
+            "backend": "xdg_screencast_pipewire", "frame_chain_sha256": "3".repeat(64), "frames_observed": 60, "payload_bytes_hashed": 125829120, "duration_ms": 5000,
+            "width": 1920, "height": 1080, "framerate_num": 30, "framerate_denom": 1, "source_kind": "monitor", "position_x": 0, "position_y": 0, "portal_width": 1920, "portal_height": 1080
         }
     });
-
     let schema = read_schema("receipt.schema.json");
-    let v4 = match schema
-        .get("$defs")
-        .and_then(|value| value.get("desktop_receipt_v4"))
-    {
-        Some(value) => value,
-        None => panic!("receipt schema must publish desktop_receipt_v4"),
-    };
-    assert_declared_object_shape(&serialized, v4);
-
-    let evidence = match serialized.get("desktop_evidence") {
-        Some(value) => value,
-        None => panic!("desktop receipt must contain desktop_evidence"),
-    };
-    let evidence_schema = match v4
-        .get("properties")
-        .and_then(|value| value.get("desktop_evidence"))
-    {
-        Some(value) => value,
-        None => panic!("v4 schema must declare desktop_evidence"),
-    };
+    let v5 = schema.get("$defs").and_then(|value| value.get("screencast_receipt_v5")).unwrap_or_else(|| panic!("receipt schema must publish screencast_receipt_v5"));
+    assert_declared_object_shape(&serialized, v5);
+    let evidence = serialized.get("screencast_evidence").unwrap_or_else(|| panic!("v5 representative must contain screencast_evidence"));
+    let evidence_schema = v5.get("properties").and_then(|value| value.get("screencast_evidence")).unwrap_or_else(|| panic!("v5 schema must declare screencast_evidence"));
     assert_declared_object_shape(evidence, evidence_schema);
     let rendered = serialized.to_string();
+    assert!(!rendered.contains("restore_token"));
+    assert!(!rendered.contains("pipe_wire_node_id"));
     assert!(!rendered.contains("file://"));
-    assert!(!rendered.contains("PNG"));
 }
 
 #[test]
 fn exact_approval_binding_survives_serialization_boundary() {
-    let first = action(
-        r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","one"]}}"#,
-    );
-    let second = action(
-        r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","two"]}}"#,
-    );
+    let first = action(r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","one"]}}"#);
+    let second = action(r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","two"]}}"#);
     let approval = Approval::allow_once(&first, "human");
     let receipt = Runtime::simulated().run(&second, Some(&approval));
-    assert_eq!(
-        receipt.ok().map(|r| r.status),
-        Some(ReceiptStatus::ApprovalRequired)
-    );
+    assert_eq!(receipt.ok().map(|r| r.status), Some(ReceiptStatus::ApprovalRequired));
 }

@@ -5,6 +5,7 @@ use crate::instance::{AuthorityInstanceGuard, InstanceError};
 use crate::obs::{self, ObsConnectionConfig};
 use crate::policy::{self, Disposition};
 use crate::receipts::{Receipt, ReceiptStatus};
+use crate::screencast;
 use crate::secrets::SecretStore;
 
 pub struct Runtime {
@@ -80,11 +81,12 @@ impl Runtime {
         if !self.execute_effects {
             return receipt_without_evidence(action, decision, ReceiptStatus::Simulated, None);
         }
-
         if action.kind() == "screen.capture" {
             return self.execute_desktop_capture(action, decision);
         }
-
+        if action.kind() == "screen.observe" {
+            return self.execute_screencast(action, decision);
+        }
         if action.kind().starts_with("obs.") {
             return self.execute_obs(action, decision);
         }
@@ -180,6 +182,104 @@ impl Runtime {
         }
     }
 
+    fn execute_screencast(
+        &self,
+        action: &Action,
+        decision: Disposition,
+    ) -> Result<Receipt, ContractError> {
+        match screencast::observe_live(action) {
+            Ok(evidence) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Completed,
+                Some(evidence),
+                None,
+            ),
+            Err(screencast::ScreencastError::InvalidAction) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Denied,
+                None,
+                Some("screen_observe_invalid_action"),
+            ),
+            Err(screencast::ScreencastError::PortalDenied) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Denied,
+                None,
+                Some("screen_observe_denied"),
+            ),
+            Err(screencast::ScreencastError::UnexpectedStreamCount) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("screen_observe_unexpected_stream_count"),
+            ),
+            Err(screencast::ScreencastError::FormatUnavailable) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("screen_observe_format_unavailable"),
+            ),
+            Err(screencast::ScreencastError::FormatChanged) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("screen_observe_format_changed"),
+            ),
+            Err(screencast::ScreencastError::CorruptedFrame) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("screen_observe_corrupted_frame"),
+            ),
+            Err(screencast::ScreencastError::UnmappableFrame) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("screen_observe_unmappable_frame"),
+            ),
+            Err(screencast::ScreencastError::FrameBoundsExceeded) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("screen_observe_frame_bounds_exceeded"),
+            ),
+            Err(screencast::ScreencastError::DeadlineExceeded) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("screen_observe_deadline_exceeded"),
+            ),
+            Err(screencast::ScreencastError::NoFramesObserved) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("screen_observe_no_frames"),
+            ),
+            Err(
+                screencast::ScreencastError::WorkerThreadFailed
+                | screencast::ScreencastError::RuntimeUnavailable
+                | screencast::ScreencastError::PortalFailed
+                | screencast::ScreencastError::PipeWireFailed,
+            ) => Receipt::new_screencast(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("screen_observe_failed"),
+            ),
+        }
+    }
+
     fn execute_obs(&self, action: &Action, decision: Disposition) -> Result<Receipt, ContractError> {
         let Some(obs_runtime) = &self.obs else {
             return Receipt::new_obs(
@@ -190,7 +290,6 @@ impl Runtime {
                 Some("obs_not_configured"),
             );
         };
-
         match obs::execute(action, &obs_runtime.config, &obs_runtime.secrets) {
             Ok(evidence) => Receipt::new_obs(
                 action,
@@ -289,6 +388,8 @@ fn receipt_without_evidence(
 ) -> Result<Receipt, ContractError> {
     if action.kind() == "screen.capture" {
         Receipt::new_desktop(action, decision, status, None, error_code)
+    } else if action.kind() == "screen.observe" {
+        Receipt::new_screencast(action, decision, status, None, error_code)
     } else if action.kind().starts_with("obs.") {
         Receipt::new_obs(action, decision, status, None, error_code)
     } else {
@@ -300,7 +401,8 @@ fn receipt_without_evidence(
 mod tests {
     use crate::contracts::{Approval, ProposedAction};
     use crate::receipts::{
-        DESKTOP_RECEIPT_SCHEMA_VERSION, OBS_RECEIPT_SCHEMA_VERSION, ReceiptStatus,
+        DESKTOP_RECEIPT_SCHEMA_VERSION, OBS_RECEIPT_SCHEMA_VERSION,
+        SCREENCAST_RECEIPT_SCHEMA_VERSION, ReceiptStatus,
     };
 
     use super::*;
@@ -322,7 +424,6 @@ mod tests {
         let second = action(r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["printf","two"]}}"#);
         let approval = Approval::allow_once(&first, "human");
         let receipt = Runtime::simulated().run(&second, Some(&approval));
-        assert!(receipt.is_ok());
         assert_eq!(
             receipt.ok().map(|r| r.status),
             Some(ReceiptStatus::ApprovalRequired)
@@ -377,6 +478,27 @@ mod tests {
         assert_eq!(
             receipt.ok().map(|value| value.schema_version),
             Some(DESKTOP_RECEIPT_SCHEMA_VERSION)
+        );
+    }
+
+    #[test]
+    fn sustained_observation_requires_approval_and_uses_v5() {
+        let action = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.observe","args":{"max_frames":60,"max_duration_ms":5000}}"#,
+        );
+        let missing = Runtime::simulated().run(&action, None);
+        match missing {
+            Ok(receipt) => {
+                assert_eq!(receipt.schema_version, SCREENCAST_RECEIPT_SCHEMA_VERSION);
+                assert_eq!(receipt.status, ReceiptStatus::ApprovalRequired);
+            }
+            Err(error) => panic!("unexpected receipt error: {error}"),
+        }
+        let approval = Approval::allow_once(&action, "human");
+        let simulated = Runtime::simulated().run(&action, Some(&approval));
+        assert_eq!(
+            simulated.ok().map(|receipt| receipt.status),
+            Some(ReceiptStatus::Simulated)
         );
     }
 }

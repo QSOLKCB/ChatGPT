@@ -9,7 +9,6 @@ Human control plane: Ratatui TUI.
 Model/provider boundary: **OpenAI only**.
 Official API origin: `https://api.openai.com`.
 License: Apache-2.0.
-Affiliation: independent community project; not affiliated with or endorsed by OpenAI.
 
 ## Prime invariant
 
@@ -17,32 +16,15 @@ Affiliation: independent community project; not affiliated with or endorsed by O
 CAPABILITY != AUTHORITY
 ```
 
-OpenAI/model output is a proposal source, never an authority source.
+OpenAI/model output proposes actions. Rust policy and human authority decide whether they may execute.
 
 ## Provider invariant
 
-Do not introduce a generic provider abstraction.
+Allowed: official OpenAI API only, opaque `cred:openai.*` handles, reviewed OpenAI model identifiers.
 
-Allowed:
-- official OpenAI API only;
-- opaque `cred:openai.*` handles;
-- reviewed OpenAI model identifiers.
+Forbidden: generic provider registries, arbitrary model endpoints/base URLs, Azure OpenAI, Claude, Gemini, Grok, OpenRouter, Bedrock, Ollama/LM Studio, other local models, third-party OpenAI-compatible endpoints, or ChatGPT browser-session tokens.
 
-Forbidden:
-- arbitrary model `base_url` or endpoint overrides;
-- Azure OpenAI;
-- Anthropic/Claude;
-- Google/Gemini;
-- xAI/Grok;
-- OpenRouter;
-- Bedrock;
-- Ollama/LM Studio/local model adapters;
-- third-party OpenAI-compatible endpoints;
-- ChatGPT browser cookies/session/access tokens as application credentials.
-
-## Primary platform invariant
-
-Target:
+## Primary platform
 
 ```text
 Ubuntu 26.04 LTS
@@ -50,78 +32,90 @@ GNOME
 Wayland
 ```
 
-Primary desktop access uses XDG Desktop Portal. Stable portal/compositor contracts are preferred over GNOME-private APIs and X11 tools.
+Use XDG Desktop Portal and PipeWire for the primary desktop path. Do not replace them with X11 scraping, GNOME-private APIs, `xdotool`, `wmctrl`, or shell helpers.
 
-## Authority-instance invariant
+## Authority instance
 
-At most one non-denied `--execute` process may hold local authority for the current Ubuntu user session.
-
-Lock:
+`Runtime::effectful*` owns a single per-user authority lease at:
 
 ```text
 /run/user/<uid>/qsol-chatgpt-authority.lock
 ```
 
-The lock directory must match the expected `XDG_RUNTIME_DIR`, be owned by the current UID, and have no group/other permission bits. Existing/stale lock => fail closed.
+Duplicate/stale lock => fail closed. Simulated/denied actions do not require effect authority.
 
-This reduces local credential/session sharing risk. It does not claim to determine whether a credential was stolen or resold.
+## Observation capabilities
 
-## Desktop observation
+### `screen.capture`
 
-`screen.capture`:
+- no args;
+- no credentials;
+- policy disposition `allow`;
+- XDG Screenshot portal;
+- complete bounded PNG validation;
+- raw bytes are zeroizing/ephemeral;
+- receipt v4 contains only hash/size/dimensions/backend/format.
 
-- accepts no model-controlled arguments;
-- accepts no credential handles;
-- is user/compositor mediated through `org.freedesktop.portal.Screenshot`;
-- accepts only a local `file://` portal result;
-- ingests at most 64 MiB;
-- currently accepts PNG only;
-- derives SHA-256, byte count, width and height;
-- serializes only `qsol-chatgpt-receipt/4` evidence;
-- never serializes screenshot URI/path/raw bytes;
-- stores raw screenshot bytes in a zeroizing buffer;
-- removes temporary `/run/user`, `/tmp`, or `/var/tmp` portal artifacts best-effort after ingestion.
+### `screen.observe`
 
-Continuous future visual observation MUST use XDG ScreenCast + PipeWire through a separately reviewed capability. Do not implement screenshot polling as an ersatz video stream.
+- args exactly `max_frames` + `max_duration_ms`;
+- `max_frames`: 1..=300;
+- `max_duration_ms`: 500..=30000;
+- no credentials;
+- policy disposition `approval_required`;
+- approval binds to exact limits through `action_id`;
+- XDG ScreenCast portal, one user-selected monitor/window;
+- cursor hidden;
+- `PersistMode::DoNot`;
+- no restore token retention;
+- portal PipeWire FD/node remain internal;
+- mapped frame payload is hashed in place;
+- no application-owned raw-frame archive;
+- receipt v5 stores a frame-chain hash + bounded video/source geometry metadata;
+- no raw pixels, source titles, node IDs, FDs, restore tokens, or portal paths in receipts.
 
-## Desktop APIs explicitly not used for the primary path
-
-- `gnome-screenshot` subprocess automation;
-- `xdotool`;
-- `wmctrl`;
-- X11 root capture;
-- GNOME Shell `Eval`;
-- private Mutter/GNOME Shell DBus APIs.
+PR #4 MUST NOT forward raw frames to OpenAI. Forwarding requires later redaction, Secret Service credential, bounded official image request, and `api.openai.com` egress gates.
 
 ## Receipt versions
 
 - process: `qsol-chatgpt-receipt/2`
 - OBS: `qsol-chatgpt-receipt/3`
-- desktop screenshot: `qsol-chatgpt-receipt/4`
+- one-shot screenshot: `qsol-chatgpt-receipt/4`
+- sustained ScreenCast: `qsol-chatgpt-receipt/5`
 
-Existing v2/v3 semantics must not be weakened when extending v4.
+Earlier receipt semantics must remain stable when newer receipt kinds are added.
+
+## OBS boundary
+
+OBS transport is loopback-only and typed. `obs.stream.start` remains denied. No raw OBS request escape exists.
 
 ## Credential rules
 
-Raw credentials MUST NOT appear in:
-- proposal/action JSON;
-- action identity material;
-- receipts;
-- logs;
-- TUI state;
-- CLI arguments;
-- ambient environment-variable credential paths;
-- repository config/fixtures.
-
-Future OpenAI credential resolution uses an OS keyring/Secret Service broker at the last responsible moment.
+Raw credentials never enter action JSON, receipts, logs, TUI state, CLI arguments, ambient env credential paths, or repository fixtures. Long-term OpenAI credential resolution must use Ubuntu Secret Service / OS keyring.
 
 ## Rust / dependency rules
 
 - Rust MSRV: 1.87+.
-- `unsafe_code = "forbid"`.
-- `ashpd` is used narrowly for XDG Screenshot portal support.
-- `tokio` exists only to drive async portal calls in this phase.
-- no provider/network SDK is introduced by the OpenAI-only configuration contract itself.
+- `unsafe_code = "forbid"` in this repository.
+- `ashpd`: Screenshot + ScreenCast portal client.
+- `pipewire`: safe Rust API over system PipeWire for sustained observation.
+- Ubuntu build dependency: `libpipewire-0.3-dev`.
+- tests must not require live credentials, portal interaction, PipeWire server, desktop injection, or privileged mutation.
+
+## Future authority separation
+
+Keep these independently granted/revoked:
+
+```text
+desktop observation
+keyboard/mouse input
+microphone observation
+assistant voice output
+OBS local recording
+OBS public broadcast
+```
+
+Microphone permission never implies recording. Local recording never implies public broadcast.
 
 ## Source-of-truth order
 

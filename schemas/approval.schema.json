@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/QSOLKCB/ChatGPT/schemas/approval.schema.json",
+  "title": "QSOL ChatGPT Approval",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "action_id", "approved", "approved_by"],
+  "properties": {
+    "schema_version": {"const": "qsol-chatgpt-approval/1"},
+    "action_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "approved": {"type": "boolean"},
+    "approved_by": {"type": "string", "minLength": 1}
+  }
+}

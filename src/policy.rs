@@ -4,6 +4,10 @@ use serde_json::Value;
 use crate::contracts::Action;
 
 const MAX_OBS_SCENE_NAME_CHARS: usize = 512;
+const MIN_OBSERVE_DURATION_MS: u64 = 500;
+const MAX_OBSERVE_DURATION_MS: u64 = 30_000;
+const MIN_OBSERVE_FRAMES: u64 = 1;
+const MAX_OBSERVE_FRAMES: u64 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -23,6 +27,7 @@ pub struct PolicyDecision {
 pub fn evaluate(action: &Action) -> PolicyDecision {
     match action.kind() {
         "screen.capture" => screen_capture_policy(action),
+        "screen.observe" => screen_observe_policy(action),
         "filesystem.read" => PolicyDecision {
             disposition: Disposition::Allow,
             code: "read_only_capability",
@@ -71,6 +76,47 @@ fn screen_capture_policy(action: &Action) -> PolicyDecision {
         disposition: Disposition::Allow,
         code: "desktop_observation",
         reason: "one-shot Ubuntu Wayland screenshot capture is user-mediated by XDG Desktop Portal",
+    }
+}
+
+fn screen_observe_policy(action: &Action) -> PolicyDecision {
+    if !action.credential_handles().is_empty() {
+        return deny(
+            "screen_observe_credentials_forbidden",
+            "sustained desktop observation never receives credential handles",
+        );
+    }
+    if action.args().len() != 2 {
+        return deny(
+            "screen_observe_invalid_bounds",
+            "screen.observe requires exactly max_frames and max_duration_ms",
+        );
+    }
+
+    let valid_frames = action
+        .args()
+        .get("max_frames")
+        .and_then(Value::as_u64)
+        .is_some_and(|value| (MIN_OBSERVE_FRAMES..=MAX_OBSERVE_FRAMES).contains(&value));
+    let valid_duration = action
+        .args()
+        .get("max_duration_ms")
+        .and_then(Value::as_u64)
+        .is_some_and(|value| {
+            (MIN_OBSERVE_DURATION_MS..=MAX_OBSERVE_DURATION_MS).contains(&value)
+        });
+
+    if !valid_frames || !valid_duration {
+        return deny(
+            "screen_observe_invalid_bounds",
+            "screen.observe bounds must be 1..=300 frames and 500..=30000 milliseconds",
+        );
+    }
+
+    PolicyDecision {
+        disposition: Disposition::ApprovalRequired,
+        code: "sustained_desktop_observation",
+        reason: "bounded XDG ScreenCast observation requires exact human approval for its frame and duration limits",
     }
 }
 
@@ -280,6 +326,32 @@ mod tests {
 
         let with_credential = action(
             r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.capture","credential_handles":["cred:openai.default"]}"#,
+        );
+        assert_eq!(evaluate(&with_credential).disposition, Disposition::Deny);
+    }
+
+    #[test]
+    fn screen_observe_is_bounded_credential_free_and_approval_gated() {
+        let valid = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.observe","args":{"max_frames":60,"max_duration_ms":5000}}"#,
+        );
+        assert_eq!(
+            evaluate(&valid).disposition,
+            Disposition::ApprovalRequired
+        );
+
+        let missing_bound = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.observe","args":{"max_frames":60}}"#,
+        );
+        assert_eq!(evaluate(&missing_bound).disposition, Disposition::Deny);
+
+        let too_long = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.observe","args":{"max_frames":60,"max_duration_ms":30001}}"#,
+        );
+        assert_eq!(evaluate(&too_long).disposition, Disposition::Deny);
+
+        let with_credential = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.observe","args":{"max_frames":60,"max_duration_ms":5000},"credential_handles":["cred:openai.default"]}"#,
         );
         assert_eq!(evaluate(&with_credential).disposition, Disposition::Deny);
     }

@@ -5,7 +5,8 @@
   "oneOf": [
     {"$ref": "#/$defs/process_receipt_v2"},
     {"$ref": "#/$defs/obs_receipt_v3"},
-    {"$ref": "#/$defs/desktop_receipt_v4"}
+    {"$ref": "#/$defs/desktop_receipt_v4"},
+    {"$ref": "#/$defs/screencast_receipt_v5"}
   ],
   "$defs": {
     "process_receipt_v2": {
@@ -20,8 +21,7 @@
         "decision": {"enum": ["allow", "approval_required", "deny"]},
         "status": {"enum": ["denied", "approval_required", "simulated", "completed", "failed", "unsupported"]},
         "evidence": {
-          "type": "object",
-          "additionalProperties": false,
+          "type": "object", "additionalProperties": false,
           "required": ["exit_code", "stdout_sha256", "stdout_bytes", "stderr_sha256", "stderr_bytes"],
           "properties": {
             "exit_code": {"type": ["integer", "null"]},
@@ -35,8 +35,7 @@
       }
     },
     "obs_receipt_v3": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["schema_version", "receipt_id", "action_id", "kind", "decision", "status"],
       "properties": {
         "schema_version": {"const": "qsol-chatgpt-receipt/3"},
@@ -46,92 +45,36 @@
         "decision": {"enum": ["allow", "approval_required", "deny"]},
         "status": {"enum": ["denied", "approval_required", "simulated", "completed", "failed", "unsupported"]},
         "obs_evidence": {
-          "type": "object",
-          "additionalProperties": false,
+          "type": "object", "additionalProperties": false,
           "required": ["request_type", "response_sha256", "response_bytes", "observation"],
           "properties": {
-            "request_type": {
-              "enum": [
-                "GetVersion",
-                "GetSceneList",
-                "GetCurrentProgramScene",
-                "GetRecordStatus",
-                "GetStreamStatus",
-                "SetCurrentProgramScene",
-                "StartRecord",
-                "StopRecord",
-                "StopStream"
-              ]
-            },
+            "request_type": {"enum": ["GetVersion", "GetSceneList", "GetCurrentProgramScene", "GetRecordStatus", "GetStreamStatus", "SetCurrentProgramScene", "StartRecord", "StopRecord", "StopStream"]},
             "response_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "response_bytes": {"type": "integer", "minimum": 0, "maximum": 1048576},
             "observation": {
               "oneOf": [
                 {
-                  "type": "object",
-                  "additionalProperties": false,
+                  "type": "object", "additionalProperties": false,
                   "required": ["observation_type", "obs_version_sha256", "obs_version_bytes", "obs_websocket_version_sha256", "obs_websocket_version_bytes", "rpc_version", "available_request_count"],
                   "properties": {
-                    "observation_type": {"const": "version"},
-                    "obs_version_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                    "obs_version_bytes": {"type": "integer", "minimum": 0},
-                    "obs_websocket_version_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                    "obs_websocket_version_bytes": {"type": "integer", "minimum": 0},
-                    "rpc_version": {"type": "integer", "minimum": 0},
-                    "available_request_count": {"type": "integer", "minimum": 0, "maximum": 1024}
+                    "observation_type": {"const": "version"}, "obs_version_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "obs_version_bytes": {"type": "integer", "minimum": 0}, "obs_websocket_version_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "obs_websocket_version_bytes": {"type": "integer", "minimum": 0}, "rpc_version": {"type": "integer", "minimum": 0}, "available_request_count": {"type": "integer", "minimum": 0, "maximum": 1024}
                   }
                 },
                 {
-                  "type": "object",
-                  "additionalProperties": false,
+                  "type": "object", "additionalProperties": false,
                   "required": ["observation_type", "current_program_scene_sha256", "current_program_scene_bytes", "scene_list_sha256", "scene_count"],
                   "properties": {
-                    "observation_type": {"const": "scene_list"},
-                    "current_program_scene_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                    "current_program_scene_bytes": {"type": "integer", "minimum": 0},
-                    "scene_list_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                    "scene_count": {"type": "integer", "minimum": 0, "maximum": 256}
+                    "observation_type": {"const": "scene_list"}, "current_program_scene_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "current_program_scene_bytes": {"type": "integer", "minimum": 0}, "scene_list_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "scene_count": {"type": "integer", "minimum": 0, "maximum": 256}
                   }
                 },
                 {
-                  "type": "object",
-                  "additionalProperties": false,
+                  "type": "object", "additionalProperties": false,
                   "required": ["observation_type", "scene_name_sha256", "scene_name_bytes"],
-                  "properties": {
-                    "observation_type": {"const": "current_scene"},
-                    "scene_name_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                    "scene_name_bytes": {"type": "integer", "minimum": 0}
-                  }
+                  "properties": {"observation_type": {"const": "current_scene"}, "scene_name_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "scene_name_bytes": {"type": "integer", "minimum": 0}}
                 },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["observation_type", "active", "paused"],
-                  "properties": {
-                    "observation_type": {"const": "record_status"},
-                    "active": {"type": "boolean"},
-                    "paused": {"type": "boolean"}
-                  }
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["observation_type", "active", "reconnecting"],
-                  "properties": {
-                    "observation_type": {"const": "stream_status"},
-                    "active": {"type": "boolean"},
-                    "reconnecting": {"type": "boolean"}
-                  }
-                },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["observation_type", "acknowledged"],
-                  "properties": {
-                    "observation_type": {"const": "mutation"},
-                    "acknowledged": {"type": "boolean"}
-                  }
-                }
+                {"type": "object", "additionalProperties": false, "required": ["observation_type", "active", "paused"], "properties": {"observation_type": {"const": "record_status"}, "active": {"type": "boolean"}, "paused": {"type": "boolean"}}},
+                {"type": "object", "additionalProperties": false, "required": ["observation_type", "active", "reconnecting"], "properties": {"observation_type": {"const": "stream_status"}, "active": {"type": "boolean"}, "reconnecting": {"type": "boolean"}}},
+                {"type": "object", "additionalProperties": false, "required": ["observation_type", "acknowledged"], "properties": {"observation_type": {"const": "mutation"}, "acknowledged": {"type": "boolean"}}}
               ]
             }
           }
@@ -140,8 +83,7 @@
       }
     },
     "desktop_receipt_v4": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["schema_version", "receipt_id", "action_id", "kind", "decision", "status"],
       "properties": {
         "schema_version": {"const": "qsol-chatgpt-receipt/4"},
@@ -151,8 +93,7 @@
         "decision": {"enum": ["allow", "deny"]},
         "status": {"enum": ["denied", "simulated", "completed", "failed", "unsupported"]},
         "desktop_evidence": {
-          "type": "object",
-          "additionalProperties": false,
+          "type": "object", "additionalProperties": false,
           "required": ["backend", "image_sha256", "image_bytes", "width", "height", "image_format"],
           "properties": {
             "backend": {"const": "xdg_desktop_portal_screenshot"},
@@ -161,6 +102,39 @@
             "width": {"type": "integer", "minimum": 1},
             "height": {"type": "integer", "minimum": 1},
             "image_format": {"const": "png"}
+          }
+        },
+        "error_code": {"type": "string", "minLength": 1}
+      }
+    },
+    "screencast_receipt_v5": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "receipt_id", "action_id", "kind", "decision", "status"],
+      "properties": {
+        "schema_version": {"const": "qsol-chatgpt-receipt/5"},
+        "receipt_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "action_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "kind": {"const": "screen.observe"},
+        "decision": {"enum": ["approval_required", "deny"]},
+        "status": {"enum": ["denied", "approval_required", "simulated", "completed", "failed", "unsupported"]},
+        "screencast_evidence": {
+          "type": "object", "additionalProperties": false,
+          "required": ["backend", "frame_chain_sha256", "frames_observed", "payload_bytes_hashed", "duration_ms", "width", "height", "framerate_num", "framerate_denom", "source_kind"],
+          "properties": {
+            "backend": {"const": "xdg_screencast_pipewire"},
+            "frame_chain_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "frames_observed": {"type": "integer", "minimum": 1, "maximum": 300},
+            "payload_bytes_hashed": {"type": "integer", "minimum": 1, "maximum": 20132659200},
+            "duration_ms": {"type": "integer", "minimum": 0},
+            "width": {"type": "integer", "minimum": 1, "maximum": 16384},
+            "height": {"type": "integer", "minimum": 1, "maximum": 16384},
+            "framerate_num": {"type": "integer", "minimum": 0},
+            "framerate_denom": {"type": "integer", "minimum": 1},
+            "source_kind": {"enum": ["monitor", "window", "virtual", "unknown"]},
+            "position_x": {"type": "integer"},
+            "position_y": {"type": "integer"},
+            "portal_width": {"type": "integer", "minimum": 1},
+            "portal_height": {"type": "integer", "minimum": 1}
           }
         },
         "error_code": {"type": "string", "minLength": 1}

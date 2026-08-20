@@ -6,23 +6,25 @@ This file records the review required by `AGENTS.md` before a direct dependency 
 
 | Crate | Declared range | Upstream license | Why it is present | Trust-boundary placement |
 | --- | --- | --- | --- | --- |
-| `ashpd` | `0.13`, `default-features = false`, `features = ["screenshot", "tokio"]` | MIT | Ubuntu 26.04 GNOME Wayland desktop observation should use the standard XDG Desktop Portal Screenshot API instead of GNOME-private or X11-specific capture paths. Hand-writing the DBus request/response lifecycle would enlarge the trusted parser/protocol surface. | Ubuntu desktop observation adapter only; no provider/policy authority decisions. |
-| `base64` | `0.22` | MIT OR Apache-2.0 | obs-websocket 5.x authentication requires base64 encoding of SHA-256 challenge material. The standard library provides no base64 codec. | OBS authentication adapter only; never imported by policy/contracts. |
-| `clap` | `4.5` | MIT OR Apache-2.0 | The standard library exposes raw argv but no typed subcommand/flag parser. `clap` keeps CLI parsing declarative and rejects malformed command shapes before dispatch. | CLI adapter only; not imported by policy/contracts. |
-| `crossterm` | `0.28` | MIT | The standard library has no raw terminal mode, alternate-screen, keyboard-event, or cursor-control API. | TUI adapter only. |
-| `ratatui` | `0.29` | MIT | The standard library has no terminal layout/widget renderer. It provides the human authority console without a heavyweight GUI framework. | TUI adapter only. |
-| `serde` | `1` | MIT OR Apache-2.0 | Language-neutral machine contracts require explicit, testable serialization/deserialization. Hand-written JSON conversion would enlarge the security-sensitive parser surface. | Contracts and receipt boundary. |
-| `serde_json` | `1` | MIT OR Apache-2.0 | JSON is the published interchange format and canonical identity input. The standard library has no JSON parser/serializer. | Contracts, CLI input, receipts. |
-| `sha2` | `0.10` | MIT OR Apache-2.0 | Action and receipt identities require SHA-256; the standard library deliberately provides no cryptographic hash implementation. | Contracts, receipts, OBS and desktop observation fingerprints. |
-| `thiserror` | `2` | MIT OR Apache-2.0 | The standard library provides `Error`/`Display` traits but no derive support. `thiserror` keeps error text declarative and avoids duplicated manual implementations across security boundary errors. | Error representation only; no authority decisions. |
-| `tokio` | `1.51`, `default-features = false`, `features = ["rt-multi-thread"]` | MIT | `ashpd` exposes async portal requests. The binary/library need a bounded runtime to bridge the existing synchronous authority core to the user-mediated portal call. | Desktop portal adapter runtime only; not a general autonomous-task runtime. |
-| `tungstenite` | `0.30` with `default-features = false`, `features = ["handshake"]` | MIT OR Apache-2.0 | The standard library exposes TCP but has no RFC 6455 WebSocket framing or handshake implementation. A reviewed WebSocket implementation is materially smaller and less error-prone than maintaining a custom protocol stack. | OBS loopback transport only. It is not imported by policy/contracts, accepts only `127.0.0.1`, and is bounded by message-size and absolute exchange deadlines. |
-| `zeroize` | `1` | MIT OR Apache-2.0 | Rust memory safety does not erase secret or screenshot bytes. `zeroize` provides explicit best-effort memory clearing that the standard library does not guarantee. | Secret store, OBS authentication intermediates, ephemeral desktop frames, and captured process-output cleanup. |
+| `ashpd` | `0.13`, `default-features = false`, `features = ["screenshot", "screencast", "tokio"]` | MIT | Ubuntu 26.04 GNOME Wayland observation uses standard XDG Screenshot and ScreenCast portals instead of GNOME-private or X11-specific capture. Hand-writing the DBus lifecycle would enlarge the trusted protocol surface. | Ubuntu desktop observation adapter only; no provider or policy authority decisions. |
+| `base64` | `0.22` | MIT OR Apache-2.0 | obs-websocket 5.x authentication requires base64 encoding of SHA-256 challenge material. | OBS authentication adapter only. |
+| `clap` | `4.5` | MIT OR Apache-2.0 | Provides typed CLI parsing rather than hand-written argument dispatch. | CLI adapter only. |
+| `crossterm` | `0.28` | MIT | Provides terminal raw mode, input events, alternate screen, and cursor control. | TUI adapter only. |
+| `pipewire` | `0.10` | MIT | The ScreenCast portal yields a PipeWire remote FD and node. The standard library has no PipeWire media-graph or mapped-buffer API. | Sustained desktop observation only. The crate provides safe Rust bindings over the system PipeWire library; this repository continues to forbid `unsafe` in its own code. |
+| `ratatui` | `0.29` | MIT | Provides the human authority console without a heavyweight GUI framework. | TUI adapter only. |
+| `serde` | `1` | MIT OR Apache-2.0 | Machine contracts require testable serialization/deserialization. | Contracts and receipt boundary. |
+| `serde_json` | `1` | MIT OR Apache-2.0 | JSON is the published interchange and identity input format. | Contracts, CLI input, receipts. |
+| `sha2` | `0.10` | MIT OR Apache-2.0 | Action/receipt identities and secret-free observation fingerprints require SHA-256. | Contracts, receipts, OBS and desktop observation fingerprints. |
+| `thiserror` | `2` | MIT OR Apache-2.0 | Declarative error types avoid duplicated manual implementations. | Error representation only. |
+| `tokio` | `1.51`, `default-features = false`, `features = ["rt-multi-thread"]` | MIT | `ashpd` portal requests are async. A dedicated portal worker bridges them to the synchronous authority core without nesting a runtime in caller threads. | XDG portal adapter runtime only. |
+| `tungstenite` | `0.30`, `default-features = false`, `features = ["handshake"]` | MIT OR Apache-2.0 | Implements the bounded loopback WebSocket protocol used by OBS. | OBS loopback transport only. |
+| `zeroize` | `1` | MIT OR Apache-2.0 | Rust memory safety does not erase secret or screenshot bytes. | Secret store, OBS auth intermediates, one-shot frames, and process-output cleanup. |
 
 ## Upstream sources checked
 
 - `ashpd`: https://github.com/bilelmoussaoui/ashpd — current 0.13 line declares MIT and Rust 1.87.
-- `base64`: https://github.com/marshallpierce/rust-base64 — v0.22.1 declares `MIT OR Apache-2.0`.
+- `pipewire`: https://pipewire.pages.freedesktop.org/pipewire-rs/pipewire/ and https://docs.rs/pipewire/0.10.0 — 0.10.0 declares MIT and provides safe Rust bindings over system PipeWire.
+- `base64`: https://github.com/marshallpierce/rust-base64
 - `clap`: https://github.com/clap-rs/clap
 - `crossterm`: https://github.com/crossterm-rs/crossterm
 - `ratatui`: https://github.com/ratatui/ratatui
@@ -31,42 +33,37 @@ This file records the review required by `AGENTS.md` before a direct dependency 
 - `sha2`: https://github.com/RustCrypto/hashes
 - `thiserror`: https://github.com/dtolnay/thiserror
 - `tokio`: https://github.com/tokio-rs/tokio
-- `tungstenite`: https://github.com/snapview/tungstenite-rs — v0.30.0 declares `MIT OR Apache-2.0`, Rust 1.85, and isolates TLS behind optional features that this loopback adapter does not enable.
+- `tungstenite`: https://github.com/snapview/tungstenite-rs
 - `zeroize`: https://github.com/RustCrypto/utils
 
-## Rust MSRV change
+## Rust MSRV
 
-PR #3 raises this application's declared Rust MSRV from 1.85 to **1.87** because the current `ashpd` 0.13 portal wrapper requires Rust 1.87. The project prefers a current XDG portal binding over pinning an older desktop-integration layer for Ubuntu 26.04 LTS.
+Rust **1.87** remains the application MSRV because `ashpd` 0.13 requires it. PR #4 does not raise the MSRV further.
 
-## Ubuntu portal dependency constraints
+## Ubuntu portal and PipeWire constraints
 
-The `ashpd` dependency is intentionally narrow:
+The sustained observation path is deliberately narrow:
 
-1. only the `screenshot` and `tokio` features are enabled;
-2. no GTK, X11, Wayland-client, RemoteDesktop, InputCapture, or PipeWire feature is enabled in this PR;
-3. screenshot requests go through the standard `org.freedesktop.portal.Screenshot` interface;
-4. portal-provided file URIs are validated before host-file access;
-5. screenshot bytes are bounded in memory, hashed for receipts, and kept out of serialized audit output;
-6. sustained visual observation is deferred to a separately reviewed ScreenCast/PipeWire capability.
+1. `ashpd` enables only `screenshot`, `screencast`, and `tokio`; RemoteDesktop/InputCapture remain disabled.
+2. ScreenCast source selection remains user-mediated by the portal.
+3. Exactly one monitor or window is selected per bounded observation action.
+4. `PersistMode::DoNot` is used and restore tokens are not retained.
+5. The portal-provided PipeWire FD/node remain internal and never appear in receipts.
+6. Mapped frame payload is hashed in place and is not copied into an application frame archive.
+7. Each `screen.observe` action binds maximum frame count and maximum duration into its `action_id`.
+8. Raw frame forwarding to OpenAI remains disabled until redaction, credential, and egress gates are implemented.
+9. Ubuntu builds require the system development package `libpipewire-0.3-dev`; CI installs it explicitly.
 
 ## OBS network dependency constraints
 
-`tungstenite` is the first direct dependency on a live network path. Its use is deliberately narrower than a general network client:
-
-1. destination address is constructed internally as IPv4 loopback only;
-2. no caller-supplied hostname, URL, or remote IP is accepted;
-3. TLS features are disabled because remote/TLS destinations are outside this capability contract;
-4. incoming frame/message sizes are capped at 1 MiB;
-5. TCP reads/writes are bounded by an absolute three-second handshake/request deadline;
-6. raw WebSocket objects are not exported through the public crate API;
-7. model/provider code cannot invoke the transport directly.
+`tungstenite` remains restricted to the OBS loopback path: internally constructed `127.0.0.1`, no arbitrary URL, bounded messages, absolute deadlines, and no exported raw WebSocket object.
 
 ## Release gate
 
 Direct review is necessary but not sufficient. Before a release artifact is produced:
 
-1. generate and commit a deterministic `Cargo.lock` for the application;
+1. generate and commit a deterministic `Cargo.lock`;
 2. enumerate the complete transitive dependency graph;
 3. run automated license-policy and vulnerability/advisory checks;
-4. retain required third-party notices in release artifacts;
-5. fail the release on an unreviewed or incompatible license.
+4. retain required third-party notices;
+5. fail release on an unreviewed or incompatible license.

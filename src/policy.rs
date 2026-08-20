@@ -3,6 +3,8 @@ use serde_json::Value;
 
 use crate::contracts::Action;
 
+const MAX_OBS_SCENE_NAME_CHARS: usize = 512;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Disposition {
@@ -31,11 +33,93 @@ pub fn evaluate(action: &Action) -> PolicyDecision {
             code: "effectful_capability",
             reason: "known effectful capability requires exact approval",
         },
+        "obs.version.get"
+        | "obs.scene.list"
+        | "obs.scene.current"
+        | "obs.record.status"
+        | "obs.stream.status" => obs_policy(action, false),
+        "obs.scene.set" | "obs.record.start" | "obs.record.stop" | "obs.stream.stop" => {
+            obs_policy(action, true)
+        }
+        "obs.stream.start" => deny(
+            "broadcast_start_disabled",
+            "starting a public stream requires a stronger approval class that is not implemented",
+        ),
         _ => PolicyDecision {
             disposition: Disposition::Deny,
             code: "unknown_capability",
             reason: "unknown action kinds fail closed",
         },
+    }
+}
+
+fn obs_policy(action: &Action, effectful: bool) -> PolicyDecision {
+    if action.credential_handles().len() > 1 {
+        return deny(
+            "obs_credential_arity",
+            "OBS actions may bind at most one credential handle",
+        );
+    }
+
+    match action.kind() {
+        "obs.scene.set" => {
+            if action.args().len() != 1 {
+                return deny(
+                    "obs_invalid_arguments",
+                    "obs.scene.set requires exactly one scene_name argument",
+                );
+            }
+            let Some(scene_name) = action.args().get("scene_name").and_then(Value::as_str) else {
+                return deny(
+                    "obs_invalid_arguments",
+                    "obs.scene.set requires a string scene_name",
+                );
+            };
+            if scene_name.trim().is_empty()
+                || scene_name.chars().count() > MAX_OBS_SCENE_NAME_CHARS
+                || scene_name.contains('\0')
+            {
+                return deny(
+                    "obs_invalid_arguments",
+                    "OBS scene names must be non-empty, bounded UTF-8 strings",
+                );
+            }
+        }
+        "obs.version.get"
+        | "obs.scene.list"
+        | "obs.scene.current"
+        | "obs.record.status"
+        | "obs.stream.status"
+        | "obs.record.start"
+        | "obs.record.stop"
+        | "obs.stream.stop" => {
+            if !action.args().is_empty() {
+                return deny(
+                    "obs_invalid_arguments",
+                    "this OBS capability does not accept arguments",
+                );
+            }
+        }
+        _ => {
+            return deny(
+                "unknown_capability",
+                "unknown OBS action kinds fail closed",
+            );
+        }
+    }
+
+    if effectful {
+        PolicyDecision {
+            disposition: Disposition::ApprovalRequired,
+            code: "obs_effect",
+            reason: "OBS state mutation requires exact human approval",
+        }
+    } else {
+        PolicyDecision {
+            disposition: Disposition::Allow,
+            code: "obs_read_only",
+            reason: "known read-only OBS capability through the loopback broker",
+        }
     }
 }
 
@@ -176,5 +260,47 @@ mod tests {
             let action = action(&json);
             assert_eq!(evaluate(&action).code, "shell_escape", "argv={argv}");
         }
+    }
+
+    #[test]
+    fn obs_reads_are_allowed_but_mutations_require_approval() {
+        let read = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.list"}"#,
+        );
+        let mutation = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.record.start"}"#,
+        );
+        assert_eq!(evaluate(&read).disposition, Disposition::Allow);
+        assert_eq!(
+            evaluate(&mutation).disposition,
+            Disposition::ApprovalRequired
+        );
+    }
+
+    #[test]
+    fn obs_stream_start_is_explicitly_denied() {
+        let action = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.stream.start"}"#,
+        );
+        assert_eq!(evaluate(&action).disposition, Disposition::Deny);
+        assert_eq!(evaluate(&action).code, "broadcast_start_disabled");
+    }
+
+    #[test]
+    fn raw_obs_request_escape_is_denied() {
+        let action = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.raw_request","args":{"request_type":"StartStream"}}"#,
+        );
+        assert_eq!(evaluate(&action).disposition, Disposition::Deny);
+        assert_eq!(evaluate(&action).code, "unknown_capability");
+    }
+
+    #[test]
+    fn malformed_obs_scene_change_is_denied() {
+        let action = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.set","args":{"scene_name":""}}"#,
+        );
+        assert_eq!(evaluate(&action).disposition, Disposition::Deny);
+        assert_eq!(evaluate(&action).code, "obs_invalid_arguments");
     }
 }

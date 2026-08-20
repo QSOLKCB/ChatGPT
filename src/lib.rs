@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod contracts;
-pub mod executor;
+mod executor;
 pub mod policy;
 pub mod receipts;
 pub mod runtime;

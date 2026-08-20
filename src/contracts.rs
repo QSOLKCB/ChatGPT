@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -11,14 +11,16 @@ pub const ACTION_SCHEMA_VERSION: &str = "qsol-chatgpt-action/2";
 pub const APPROVAL_SCHEMA_VERSION: &str = "qsol-chatgpt-approval/2";
 pub const RECEIPT_SCHEMA_VERSION: &str = "qsol-chatgpt-receipt/2";
 
-const FORBIDDEN_SECRET_KEYS: &[&str] = &[
-    "api_key",
+const MAX_KIND_CHARS: usize = 128;
+const MAX_REQUESTER_CHARS: usize = 256;
+const FORBIDDEN_SECRET_KEY_SUFFIXES: &[&str] = &[
     "apikey",
     "authorization",
     "cookie",
     "password",
-    "private_key",
+    "privatekey",
     "secret",
+    "secretkey",
     "token",
 ];
 
@@ -28,8 +30,12 @@ pub enum ContractError {
     UnsupportedSchema,
     #[error("action kind must not be empty")]
     EmptyKind,
+    #[error("action kind exceeds 128 characters")]
+    KindTooLong,
     #[error("requested_by must not be empty")]
     EmptyRequester,
+    #[error("requested_by exceeds 256 characters")]
+    RequesterTooLong,
     #[error("raw secret-shaped field is forbidden in action arguments: {0}")]
     RawSecretField(String),
     #[error("invalid credential handle")]
@@ -38,7 +44,7 @@ pub enum ContractError {
     Serialization,
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct CredentialHandle(String);
 
@@ -57,6 +63,16 @@ impl CredentialHandle {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for CredentialHandle {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -110,8 +126,14 @@ impl ProposedAction {
         if self.kind.trim().is_empty() {
             return Err(ContractError::EmptyKind);
         }
+        if self.kind.chars().count() > MAX_KIND_CHARS {
+            return Err(ContractError::KindTooLong);
+        }
         if self.requested_by.trim().is_empty() {
             return Err(ContractError::EmptyRequester);
+        }
+        if self.requested_by.chars().count() > MAX_REQUESTER_CHARS {
+            return Err(ContractError::RequesterTooLong);
         }
         reject_secret_keys_in_map(&self.args)?;
 
@@ -193,10 +215,21 @@ pub fn canonical_hash<T: Serialize>(value: &T) -> Result<String, ContractError> 
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+fn is_forbidden_secret_key(key: &str) -> bool {
+    let compact = key
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect::<String>();
+
+    FORBIDDEN_SECRET_KEY_SUFFIXES
+        .iter()
+        .any(|suffix| compact == *suffix || compact.ends_with(suffix))
+}
+
 fn reject_secret_keys_in_map(map: &BTreeMap<String, Value>) -> Result<(), ContractError> {
     for (key, value) in map {
-        let lowered = key.to_ascii_lowercase();
-        if FORBIDDEN_SECRET_KEYS.contains(&lowered.as_str()) {
+        if is_forbidden_secret_key(key) {
             return Err(ContractError::RawSecretField(key.clone()));
         }
         reject_secret_keys_in_value(value)?;
@@ -208,8 +241,7 @@ fn reject_secret_keys_in_value(value: &Value) -> Result<(), ContractError> {
     match value {
         Value::Object(map) => {
             for (key, nested) in map {
-                let lowered = key.to_ascii_lowercase();
-                if FORBIDDEN_SECRET_KEYS.contains(&lowered.as_str()) {
+                if is_forbidden_secret_key(key) {
                     return Err(ContractError::RawSecretField(key.clone()));
                 }
                 reject_secret_keys_in_value(nested)?;
@@ -259,5 +291,67 @@ mod tests {
         )
         .normalize();
         assert!(matches!(result, Err(ContractError::RawSecretField(_))));
+    }
+
+    #[test]
+    fn compound_secret_field_names_are_rejected() {
+        for key in [
+            "access_token",
+            "refresh-token",
+            "clientSecret",
+            "client_secret",
+            "private-key",
+            "db_password",
+        ] {
+            let mut args = BTreeMap::new();
+            args.insert(key.to_owned(), Value::String("raw-secret".to_owned()));
+            let result = ProposedAction {
+                schema_version: PROPOSAL_SCHEMA_VERSION.to_owned(),
+                kind: "shell.exec".to_owned(),
+                args,
+                requested_by: "agent".to_owned(),
+                credential_handles: Vec::new(),
+            }
+            .normalize();
+            assert!(
+                matches!(result, Err(ContractError::RawSecretField(_))),
+                "{key} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn credential_handle_deserialization_validates_input() {
+        let invalid: Result<CredentialHandle, _> = serde_json::from_str(r#""sk-raw-secret""#);
+        assert!(invalid.is_err());
+
+        let valid: Result<CredentialHandle, _> = serde_json::from_str(r#""cred:openai.main""#);
+        assert_eq!(valid.ok().map(|handle| handle.as_str().to_owned()), Some("cred:openai.main".to_owned()));
+    }
+
+    #[test]
+    fn normalization_enforces_schema_length_bounds() {
+        let too_long_kind = ProposedAction {
+            schema_version: PROPOSAL_SCHEMA_VERSION.to_owned(),
+            kind: "x".repeat(MAX_KIND_CHARS + 1),
+            args: BTreeMap::new(),
+            requested_by: "agent".to_owned(),
+            credential_handles: Vec::new(),
+        }
+        .normalize();
+        assert!(matches!(too_long_kind, Err(ContractError::KindTooLong)));
+
+        let too_long_requester = ProposedAction {
+            schema_version: PROPOSAL_SCHEMA_VERSION.to_owned(),
+            kind: "screen.capture".to_owned(),
+            args: BTreeMap::new(),
+            requested_by: "x".repeat(MAX_REQUESTER_CHARS + 1),
+            credential_handles: Vec::new(),
+        }
+        .normalize();
+        assert!(matches!(
+            too_long_requester,
+            Err(ContractError::RequesterTooLong)
+        ));
     }
 }

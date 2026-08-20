@@ -53,9 +53,7 @@ fn shell_policy(action: &Action) -> PolicyDecision {
     if matches!(program, "sudo" | "doas" | "su") {
         return deny("privilege_escalation", "privilege escalation commands are forbidden");
     }
-    if matches!(program, "sh" | "bash" | "zsh" | "fish")
-        && strings.iter().skip(1).any(|arg| *arg == "-c")
-    {
+    if contains_shell_command_string(&strings) {
         return deny("shell_escape", "shell interpreter command strings are forbidden");
     }
     if program.starts_with("mkfs") || matches!(program, "shutdown" | "reboot" | "poweroff" | "halt") {
@@ -75,6 +73,55 @@ fn shell_policy(action: &Action) -> PolicyDecision {
         code: "shell_effect",
         reason: "structured shell execution requires exact approval",
     }
+}
+
+fn contains_shell_command_string(argv: &[&str]) -> bool {
+    argv.iter().enumerate().any(|(index, token)| {
+        is_shell_interpreter(token)
+            && argv
+                .iter()
+                .skip(index + 1)
+                .any(|argument| is_command_string_flag(argument))
+    })
+}
+
+fn is_shell_interpreter(token: &str) -> bool {
+    let name = token.rsplit('/').next().unwrap_or(token);
+    matches!(
+        name,
+        "sh"
+            | "bash"
+            | "dash"
+            | "zsh"
+            | "fish"
+            | "ksh"
+            | "ksh93"
+            | "mksh"
+            | "pdksh"
+            | "ash"
+            | "yash"
+            | "csh"
+            | "tcsh"
+            | "elvish"
+            | "nu"
+            | "nushell"
+            | "pwsh"
+            | "powershell"
+    )
+}
+
+fn is_command_string_flag(argument: &str) -> bool {
+    let lowered = argument.to_ascii_lowercase();
+    if matches!(
+        lowered.as_str(),
+        "--command" | "-command" | "-encodedcommand"
+    ) {
+        return true;
+    }
+
+    lowered
+        .strip_prefix('-')
+        .is_some_and(|short| !short.starts_with('-') && short.contains('c'))
 }
 
 fn deny(code: &'static str, reason: &'static str) -> PolicyDecision {
@@ -116,7 +163,18 @@ mod tests {
 
     #[test]
     fn shell_escape_is_denied() {
-        let action = action(r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{"argv":["bash","-c","echo nope"]}}"#);
-        assert_eq!(evaluate(&action).code, "shell_escape");
+        for argv in [
+            r#"["bash","-c","echo nope"]"#,
+            r#"["dash","-c","echo nope"]"#,
+            r#"["bash","-lc","echo nope"]"#,
+            r#"["/usr/bin/env","bash","-lc","echo nope"]"#,
+            r#"["pwsh","-Command","Write-Output nope"]"#,
+        ] {
+            let json = format!(
+                r#"{{"schema_version":"qsol-chatgpt-proposal/1","kind":"shell.exec","args":{{"argv":{argv}}}}}"#
+            );
+            let action = action(&json);
+            assert_eq!(evaluate(&action).code, "shell_escape", "argv={argv}");
+        }
     }
 }

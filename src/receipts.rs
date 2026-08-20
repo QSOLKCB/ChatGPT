@@ -1,8 +1,16 @@
 use serde::Serialize;
 
 use crate::contracts::{canonical_hash, Action, ContractError, RECEIPT_SCHEMA_VERSION};
-use crate::executor::ExecutionEvidence;
 use crate::policy::Disposition;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExecutionEvidence {
+    pub exit_code: Option<i32>,
+    pub stdout_sha256: String,
+    pub stdout_bytes: usize,
+    pub stderr_sha256: String,
+    pub stderr_bytes: usize,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

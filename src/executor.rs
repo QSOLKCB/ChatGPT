@@ -1,15 +1,15 @@
 use std::process::Command;
 
-use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::Zeroize;
 
 use crate::contracts::Action;
+use crate::receipts::ExecutionEvidence;
 
 #[derive(Debug, Error)]
-pub enum ExecutionError {
+pub(crate) enum ExecutionError {
     #[error("executor does not support this action")]
     Unsupported,
     #[error("credential injection is not implemented")]
@@ -20,16 +20,7 @@ pub enum ExecutionError {
     SpawnFailed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ExecutionEvidence {
-    pub exit_code: Option<i32>,
-    pub stdout_sha256: String,
-    pub stdout_bytes: usize,
-    pub stderr_sha256: String,
-    pub stderr_bytes: usize,
-}
-
-pub fn execute(action: &Action) -> Result<ExecutionEvidence, ExecutionError> {
+pub(crate) fn execute(action: &Action) -> Result<ExecutionEvidence, ExecutionError> {
     if action.kind() != "shell.exec" {
         return Err(ExecutionError::Unsupported);
     }

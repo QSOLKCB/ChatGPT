@@ -1,5 +1,6 @@
 use std::io;
 
+use crossterm::cursor::Show;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
@@ -13,17 +14,32 @@ struct AppState {
     revoked: bool,
 }
 
+struct TerminalModeGuard;
+
+impl TerminalModeGuard {
+    fn enter() -> io::Result<Self> {
+        enable_raw_mode()?;
+        let guard = Self;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen)?;
+        Ok(guard)
+    }
+}
+
+impl Drop for TerminalModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, LeaveAlternateScreen, Show);
+    }
+}
+
 pub fn run() -> io::Result<()> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    let _terminal_mode = TerminalModeGuard::enter()?;
+    let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let result = event_loop(&mut terminal);
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-    result
+    event_loop(&mut terminal)
 }
 
 fn event_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {

@@ -16,7 +16,9 @@ The architecture is independently defined around general concepts:
 
 ## Dependency provenance
 
-Rust dependencies are normal upstream crates selected for narrow functions such as CLI parsing, terminal rendering, serialization, hashing, errors and zeroization. Dependencies must be license-reviewed before release packaging.
+Direct Rust dependency review is recorded in `docs/DEPENDENCIES.md`. A dependency must not be added to `Cargo.toml` until its license compatibility, role, trust-boundary placement, and standard-library/current-dependency rationale are recorded there.
+
+The current direct dependency set is limited to permissively licensed upstream crates. Transitive dependencies must additionally be locked and reviewed by automated license/advisory tooling before release packaging.
 
 ## Naming
 

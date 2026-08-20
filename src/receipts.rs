@@ -4,6 +4,7 @@ use crate::contracts::{canonical_hash, Action, ContractError, RECEIPT_SCHEMA_VER
 use crate::policy::Disposition;
 
 pub const OBS_RECEIPT_SCHEMA_VERSION: &str = "qsol-chatgpt-receipt/3";
+pub const DESKTOP_RECEIPT_SCHEMA_VERSION: &str = "qsol-chatgpt-receipt/4";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExecutionEvidence {
@@ -20,6 +21,16 @@ pub struct ObsEvidence {
     pub response_sha256: String,
     pub response_bytes: usize,
     pub observation: ObsObservation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DesktopEvidence {
+    pub backend: String,
+    pub image_sha256: String,
+    pub image_bytes: usize,
+    pub width: u32,
+    pub height: u32,
+    pub image_format: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -80,6 +91,8 @@ pub struct Receipt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub obs_evidence: Option<ObsEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub desktop_evidence: Option<DesktopEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<&'static str>,
 }
 
@@ -102,6 +115,17 @@ struct ReceiptIdentityV3<'a> {
     decision: Disposition,
     status: ReceiptStatus,
     obs_evidence: &'a Option<ObsEvidence>,
+    error_code: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct ReceiptIdentityV4<'a> {
+    schema_version: &'static str,
+    action_id: &'a str,
+    kind: &'a str,
+    decision: Disposition,
+    status: ReceiptStatus,
+    desktop_evidence: &'a Option<DesktopEvidence>,
     error_code: Option<&'static str>,
 }
 
@@ -132,6 +156,7 @@ impl Receipt {
             status,
             evidence,
             obs_evidence: None,
+            desktop_evidence: None,
             error_code,
         })
     }
@@ -162,6 +187,38 @@ impl Receipt {
             status,
             evidence: None,
             obs_evidence,
+            desktop_evidence: None,
+            error_code,
+        })
+    }
+
+    pub fn new_desktop(
+        action: &Action,
+        decision: Disposition,
+        status: ReceiptStatus,
+        desktop_evidence: Option<DesktopEvidence>,
+        error_code: Option<&'static str>,
+    ) -> Result<Self, ContractError> {
+        let identity = ReceiptIdentityV4 {
+            schema_version: DESKTOP_RECEIPT_SCHEMA_VERSION,
+            action_id: action.id(),
+            kind: action.kind(),
+            decision,
+            status,
+            desktop_evidence: &desktop_evidence,
+            error_code,
+        };
+        let receipt_id = canonical_hash(&identity)?;
+        Ok(Self {
+            schema_version: DESKTOP_RECEIPT_SCHEMA_VERSION,
+            receipt_id,
+            action_id: action.id().to_owned(),
+            kind: action.kind().to_owned(),
+            decision,
+            status,
+            evidence: None,
+            obs_evidence: None,
+            desktop_evidence,
             error_code,
         })
     }

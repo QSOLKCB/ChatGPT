@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod contracts;
+mod desktop;
 mod executor;
 pub mod instance;
 pub mod obs;

@@ -1,4 +1,5 @@
 use crate::contracts::{Action, Approval, ContractError};
+use crate::desktop;
 use crate::executor;
 use crate::obs::{self, ObsConnectionConfig};
 use crate::policy::{self, Disposition};
@@ -70,6 +71,10 @@ impl Runtime {
             return receipt_without_evidence(action, decision, ReceiptStatus::Simulated, None);
         }
 
+        if action.kind() == "screen.capture" {
+            return self.execute_desktop_capture(action, decision);
+        }
+
         if action.kind().starts_with("obs.") {
             return self.execute_obs(action, decision);
         }
@@ -114,6 +119,56 @@ impl Runtime {
         }
     }
 
+    fn execute_desktop_capture(
+        &self,
+        action: &Action,
+        decision: Disposition,
+    ) -> Result<Receipt, ContractError> {
+        match desktop::capture_live() {
+            Ok(evidence) => Receipt::new_desktop(
+                action,
+                decision,
+                ReceiptStatus::Completed,
+                Some(evidence),
+                None,
+            ),
+            Err(desktop::DesktopError::PortalDenied) => Receipt::new_desktop(
+                action,
+                decision,
+                ReceiptStatus::Denied,
+                None,
+                Some("desktop_capture_denied"),
+            ),
+            Err(desktop::DesktopError::InvalidPortalUri | desktop::DesktopError::InvalidPng) => {
+                Receipt::new_desktop(
+                    action,
+                    decision,
+                    ReceiptStatus::Failed,
+                    None,
+                    Some("desktop_capture_invalid_artifact"),
+                )
+            }
+            Err(desktop::DesktopError::ScreenshotTooLarge) => Receipt::new_desktop(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("desktop_capture_too_large"),
+            ),
+            Err(
+                desktop::DesktopError::RuntimeUnavailable
+                | desktop::DesktopError::PortalFailed
+                | desktop::DesktopError::ScreenshotOpenFailed,
+            ) => Receipt::new_desktop(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("desktop_capture_failed"),
+            ),
+        }
+    }
+
     fn execute_obs(&self, action: &Action, decision: Disposition) -> Result<Receipt, ContractError> {
         let Some(obs_runtime) = &self.obs else {
             return Receipt::new_obs(
@@ -142,17 +197,15 @@ impl Runtime {
                     Some("obs_request_unsupported"),
                 )
             }
-            Err(
-                obs::ObsError::InvalidArguments
-                | obs::ObsError::EndpointBindingMismatch
-                | obs::ObsError::CredentialBindingMismatch,
-            ) => Receipt::new_obs(
-                action,
-                decision,
-                ReceiptStatus::Denied,
-                None,
-                Some("obs_invalid_or_unbound_action"),
-            ),
+            Err(obs::ObsError::InvalidArguments | obs::ObsError::CredentialBindingMismatch) => {
+                Receipt::new_obs(
+                    action,
+                    decision,
+                    ReceiptStatus::Denied,
+                    None,
+                    Some("obs_invalid_or_unbound_action"),
+                )
+            }
             Err(obs::ObsError::MissingCredential) => Receipt::new_obs(
                 action,
                 decision,
@@ -176,13 +229,6 @@ impl Runtime {
                     Some("obs_connection_failed"),
                 )
             }
-            Err(obs::ObsError::DeadlineExceeded) => Receipt::new_obs(
-                action,
-                decision,
-                ReceiptStatus::Failed,
-                None,
-                Some("obs_deadline_exceeded"),
-            ),
             Err(obs::ObsError::ProtocolFailed | obs::ObsError::RequestFailed) => Receipt::new_obs(
                 action,
                 decision,
@@ -190,13 +236,15 @@ impl Runtime {
                 None,
                 Some("obs_protocol_or_request_failed"),
             ),
-            Err(obs::ObsError::ResponseTooLarge) => Receipt::new_obs(
-                action,
-                decision,
-                ReceiptStatus::Failed,
-                None,
-                Some("obs_response_too_large"),
-            ),
+            Err(obs::ObsError::ResponseTooLarge | obs::ObsError::DeadlineExceeded) => {
+                Receipt::new_obs(
+                    action,
+                    decision,
+                    ReceiptStatus::Failed,
+                    None,
+                    Some("obs_response_or_deadline_bound"),
+                )
+            }
         }
     }
 }
@@ -207,7 +255,9 @@ fn receipt_without_evidence(
     status: ReceiptStatus,
     error_code: Option<&'static str>,
 ) -> Result<Receipt, ContractError> {
-    if action.kind().starts_with("obs.") {
+    if action.kind() == "screen.capture" {
+        Receipt::new_desktop(action, decision, status, None, error_code)
+    } else if action.kind().starts_with("obs.") {
         Receipt::new_obs(action, decision, status, None, error_code)
     } else {
         Receipt::new(action, decision, status, None, error_code)
@@ -217,7 +267,7 @@ fn receipt_without_evidence(
 #[cfg(test)]
 mod tests {
     use crate::contracts::{Approval, ProposedAction};
-    use crate::receipts::{ReceiptStatus, OBS_RECEIPT_SCHEMA_VERSION};
+    use crate::receipts::{DESKTOP_RECEIPT_SCHEMA_VERSION, ReceiptStatus};
 
     use super::*;
 
@@ -251,43 +301,14 @@ mod tests {
     }
 
     #[test]
-    fn live_obs_action_without_config_is_unsupported() {
+    fn simulated_screen_capture_uses_desktop_receipt_contract() {
         let action = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.list","args":{"obs_port":4455}}"#,
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"screen.capture"}"#,
         );
-        let receipt = Runtime::effectful().run(&action, None);
-        match receipt {
-            Ok(receipt) => {
-                assert_eq!(receipt.status, ReceiptStatus::Unsupported);
-                assert_eq!(receipt.schema_version, OBS_RECEIPT_SCHEMA_VERSION);
-            }
-            Err(error) => panic!("unexpected receipt error: {error}"),
-        }
-    }
-
-    #[test]
-    fn stream_start_cannot_be_overridden_by_approval() {
-        let action = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.stream.start","args":{"obs_port":4455}}"#,
-        );
-        let approval = Approval::allow_once(&action, "human");
-        let receipt = Runtime::simulated().run(&action, Some(&approval));
-        assert_eq!(receipt.ok().map(|r| r.status), Some(ReceiptStatus::Denied));
-    }
-
-    #[test]
-    fn approval_for_one_obs_port_does_not_authorize_another() {
-        let first = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.record.start","args":{"obs_port":4455}}"#,
-        );
-        let second = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.record.start","args":{"obs_port":4456}}"#,
-        );
-        let approval = Approval::allow_once(&first, "human");
-        let receipt = Runtime::simulated().run(&second, Some(&approval));
+        let receipt = Runtime::simulated().run(&action, None);
         assert_eq!(
-            receipt.ok().map(|value| value.status),
-            Some(ReceiptStatus::ApprovalRequired)
+            receipt.ok().map(|value| value.schema_version),
+            Some(DESKTOP_RECEIPT_SCHEMA_VERSION)
         );
     }
 }

@@ -6,19 +6,22 @@ This file records the review required by `AGENTS.md` before a direct dependency 
 
 | Crate | Declared range | Upstream license | Why it is present | Trust-boundary placement |
 | --- | --- | --- | --- | --- |
+| `ashpd` | `0.13`, `default-features = false`, `features = ["screenshot", "tokio"]` | MIT | Ubuntu 26.04 GNOME Wayland desktop observation should use the standard XDG Desktop Portal Screenshot API instead of GNOME-private or X11-specific capture paths. Hand-writing the DBus request/response lifecycle would enlarge the trusted parser/protocol surface. | Ubuntu desktop observation adapter only; no provider/policy authority decisions. |
 | `base64` | `0.22` | MIT OR Apache-2.0 | obs-websocket 5.x authentication requires base64 encoding of SHA-256 challenge material. The standard library provides no base64 codec. | OBS authentication adapter only; never imported by policy/contracts. |
 | `clap` | `4.5` | MIT OR Apache-2.0 | The standard library exposes raw argv but no typed subcommand/flag parser. `clap` keeps CLI parsing declarative and rejects malformed command shapes before dispatch. | CLI adapter only; not imported by policy/contracts. |
 | `crossterm` | `0.28` | MIT | The standard library has no raw terminal mode, alternate-screen, keyboard-event, or cursor-control API. | TUI adapter only. |
 | `ratatui` | `0.29` | MIT | The standard library has no terminal layout/widget renderer. It provides the human authority console without a heavyweight GUI framework. | TUI adapter only. |
 | `serde` | `1` | MIT OR Apache-2.0 | Language-neutral machine contracts require explicit, testable serialization/deserialization. Hand-written JSON conversion would enlarge the security-sensitive parser surface. | Contracts and receipt boundary. |
 | `serde_json` | `1` | MIT OR Apache-2.0 | JSON is the published interchange format and canonical identity input. The standard library has no JSON parser/serializer. | Contracts, CLI input, receipts. |
-| `sha2` | `0.10` | MIT OR Apache-2.0 | Action and receipt identities require SHA-256; the standard library deliberately provides no cryptographic hash implementation. | Contracts, receipts, OBS response/secret-safe observation fingerprints. |
+| `sha2` | `0.10` | MIT OR Apache-2.0 | Action and receipt identities require SHA-256; the standard library deliberately provides no cryptographic hash implementation. | Contracts, receipts, OBS and desktop observation fingerprints. |
 | `thiserror` | `2` | MIT OR Apache-2.0 | The standard library provides `Error`/`Display` traits but no derive support. `thiserror` keeps error text declarative and avoids duplicated manual implementations across security boundary errors. | Error representation only; no authority decisions. |
+| `tokio` | `1.51`, `default-features = false`, `features = ["rt-multi-thread"]` | MIT | `ashpd` exposes async portal requests. The binary/library need a bounded runtime to bridge the existing synchronous authority core to the user-mediated portal call. | Desktop portal adapter runtime only; not a general autonomous-task runtime. |
 | `tungstenite` | `0.30` with `default-features = false`, `features = ["handshake"]` | MIT OR Apache-2.0 | The standard library exposes TCP but has no RFC 6455 WebSocket framing or handshake implementation. A reviewed WebSocket implementation is materially smaller and less error-prone than maintaining a custom protocol stack. | OBS loopback transport only. It is not imported by policy/contracts, accepts only `127.0.0.1`, and is bounded by message-size and absolute exchange deadlines. |
-| `zeroize` | `1` | MIT OR Apache-2.0 | Rust memory safety does not erase secret bytes. `zeroize` provides explicit best-effort memory clearing that the standard library does not guarantee. | Secret store, OBS authentication intermediates, and captured process-output cleanup. |
+| `zeroize` | `1` | MIT OR Apache-2.0 | Rust memory safety does not erase secret or screenshot bytes. `zeroize` provides explicit best-effort memory clearing that the standard library does not guarantee. | Secret store, OBS authentication intermediates, ephemeral desktop frames, and captured process-output cleanup. |
 
 ## Upstream sources checked
 
+- `ashpd`: https://github.com/bilelmoussaoui/ashpd — current 0.13 line declares MIT and Rust 1.87.
 - `base64`: https://github.com/marshallpierce/rust-base64 — v0.22.1 declares `MIT OR Apache-2.0`.
 - `clap`: https://github.com/clap-rs/clap
 - `crossterm`: https://github.com/crossterm-rs/crossterm
@@ -27,8 +30,24 @@ This file records the review required by `AGENTS.md` before a direct dependency 
 - `serde_json`: https://github.com/serde-rs/json
 - `sha2`: https://github.com/RustCrypto/hashes
 - `thiserror`: https://github.com/dtolnay/thiserror
+- `tokio`: https://github.com/tokio-rs/tokio
 - `tungstenite`: https://github.com/snapview/tungstenite-rs — v0.30.0 declares `MIT OR Apache-2.0`, Rust 1.85, and isolates TLS behind optional features that this loopback adapter does not enable.
 - `zeroize`: https://github.com/RustCrypto/utils
+
+## Rust MSRV change
+
+PR #3 raises this application's declared Rust MSRV from 1.85 to **1.87** because the current `ashpd` 0.13 portal wrapper requires Rust 1.87. The project prefers a current XDG portal binding over pinning an older desktop-integration layer for Ubuntu 26.04 LTS.
+
+## Ubuntu portal dependency constraints
+
+The `ashpd` dependency is intentionally narrow:
+
+1. only the `screenshot` and `tokio` features are enabled;
+2. no GTK, X11, Wayland-client, RemoteDesktop, InputCapture, or PipeWire feature is enabled in this PR;
+3. screenshot requests go through the standard `org.freedesktop.portal.Screenshot` interface;
+4. portal-provided file URIs are validated before host-file access;
+5. screenshot bytes are bounded in memory, hashed for receipts, and kept out of serialized audit output;
+6. sustained visual observation is deferred to a separately reviewed ScreenCast/PipeWire capability.
 
 ## OBS network dependency constraints
 

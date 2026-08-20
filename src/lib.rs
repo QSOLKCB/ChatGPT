@@ -2,7 +2,9 @@
 
 pub mod contracts;
 mod executor;
+pub mod instance;
 pub mod obs;
+pub mod openai;
 pub mod policy;
 pub mod receipts;
 pub mod runtime;

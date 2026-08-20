@@ -4,7 +4,7 @@ MACHINE-ORIENTED CONTRIBUTOR INSTRUCTIONS.
 
 ## Mission
 
-Maintain a small, auditable Rust authority core for a Linux-native AI workstation. Models propose. Rust decides authority. Humans retain revocation.
+Maintain a small, auditable Rust authority core for a Linux-native OpenAI workstation. Models propose. Rust decides authority. Humans retain revocation.
 
 ## Non-negotiable invariants
 
@@ -23,6 +23,9 @@ Maintain a small, auditable Rust authority core for a Linux-native AI workstatio
 13. Shell interpreter `-c` escape paths remain denied unless a future reviewed capability explicitly defines them.
 14. Real execution remains opt-in until sandbox gates in `ROADMAP.md` are satisfied.
 15. Do not weaken negative tests to make a capability pass.
+16. **OpenAI is the only permitted cloud/model provider.** Do not add a provider registry, alternate provider enum, Azure OpenAI endpoint, OpenAI-compatible third-party endpoint, local-model adapter, or caller-configurable API origin. Official OpenAI requests are fixed to `https://api.openai.com`.
+17. The primary desktop target is **Ubuntu 26.04 LTS, GNOME, Wayland**. Prefer XDG Desktop Portal and PipeWire contracts over GNOME-private APIs, X11 scraping, shell extensions, or GUI-specific command-line helpers.
+18. Desktop observation must not persist raw screenshots into receipts, logs, or repository state. Raw frames are ephemeral secret-adjacent data and should be zeroized after use where practical.
 
 ## Language boundary
 
@@ -34,9 +37,37 @@ Rust owns:
 - capability dispatch;
 - receipts/audit;
 - process supervision;
+- desktop observation brokers;
+- OpenAI provider boundary;
 - TUI authority state.
 
 Python or other languages may implement workers for media, science, automation, data analysis, or generated tasks. Workers receive only brokered capabilities and scoped inputs.
+
+## Provider boundary
+
+The repository is intentionally not provider-neutral.
+
+Allowed:
+- official OpenAI API at `https://api.openai.com`;
+- opaque OpenAI credential handles matching `cred:openai.*`;
+- OpenAI model names selected within reviewed configuration contracts.
+
+Forbidden:
+- generic `Provider` registries whose purpose is adding other vendors;
+- arbitrary `base_url` / `endpoint` overrides for model traffic;
+- Anthropic, Google/Gemini, xAI/Grok, Azure OpenAI, Bedrock, OpenRouter, Ollama, LM Studio, or other model-provider adapters;
+- third-party services that merely emulate the OpenAI wire protocol.
+
+A future architectural change to this provider restriction requires an explicit project-level decision, threat-model update, and dedicated review. It must not arrive incidentally with another feature.
+
+## Ubuntu desktop boundary
+
+For Ubuntu 26.04 LTS GNOME Wayland:
+- use `org.freedesktop.portal.*` interfaces for user-mediated desktop access;
+- use PipeWire streams obtained through the ScreenCast portal for sustained future visual observation;
+- do not depend on `gnome-screenshot`, `xdotool`, `wmctrl`, GNOME Shell `Eval`, private Mutter DBus interfaces, or X11 global capture for the primary path;
+- X11 compatibility is optional and must remain a separate adapter rather than weakening the Wayland path;
+- never bypass a portal permission dialog or persist portal grants outside documented OS behavior.
 
 ## Clean-room provenance
 
@@ -67,9 +98,12 @@ Require explicit security review for changes that add or broaden:
 - filesystem writes/deletes;
 - network access;
 - credential exposure/injection;
+- OpenAI endpoint/model configuration;
 - browser sessions/cookies;
 - clipboard access;
 - desktop capture;
+- screenshot persistence;
+- PipeWire/ScreenCast sessions;
 - keyboard/mouse injection;
 - background persistence;
 - privilege changes;

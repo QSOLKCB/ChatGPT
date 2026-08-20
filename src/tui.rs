@@ -61,7 +61,7 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resu
 
             let mode = if state.revoked { "REVOKED" } else { "READY" };
             let body = format!(
-                "CAPABILITY != AUTHORITY\n\nStatus: {mode}\n\nDefault authority\n  screen.capture    observe-only\n  filesystem.read   observe-only\n  shell.exec        approval required\n  filesystem.write  approval required\n  input.*           approval required\n  app.launch        approval required\n  network           denied / not brokered\n  credentials       opaque handles only\n\nSecrets are never stored in action JSON, receipts, logs, or TUI state."
+                "CAPABILITY != AUTHORITY\n\nStatus: {mode}\n\nDefault authority\n  screen.capture    observe-only\n  filesystem.read   observe-only\n  shell.exec        approval required\n  filesystem.write  approval required\n  input.*           approval required\n  app.launch        approval required\n\nOBS structured broker\n  obs.* reads       loopback-only read\n  scene/record      approval required\n  stream.stop       approval required\n  stream.start      DENIED pending stronger approval\n\nGeneral network     denied / not brokered\nCredentials         opaque handles only\n\nSecrets are never stored in action JSON, receipts, logs, or TUI state."
             );
             let panel = Paragraph::new(body)
                 .wrap(Wrap { trim: false })

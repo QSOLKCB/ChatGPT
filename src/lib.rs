@@ -2,6 +2,7 @@
 
 pub mod contracts;
 mod executor;
+pub mod obs;
 pub mod policy;
 pub mod receipts;
 pub mod runtime;

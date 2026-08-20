@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::contracts::{canonical_hash, Action};
 use crate::receipts::{ObsEvidence, ObsObservation};
@@ -75,8 +76,12 @@ fn observation_for(action: &Action, response: &Value) -> Result<ObsObservation, 
         "obs.scene.list" => scene_list_observation(response),
         "obs.scene.current" => {
             let data = response_data(response)?;
-            let scene_name = bounded_string(data, "currentProgramSceneName")?;
-            Ok(ObsObservation::CurrentScene { scene_name })
+            let scene_name = bounded_str(data, "currentProgramSceneName")?;
+            let (scene_name_sha256, scene_name_bytes) = sensitive_string_fingerprint(scene_name);
+            Ok(ObsObservation::CurrentScene {
+                scene_name_sha256,
+                scene_name_bytes,
+            })
         }
         "obs.record.status" => {
             let data = response_data(response)?;
@@ -102,16 +107,21 @@ fn observation_for(action: &Action, response: &Value) -> Result<ObsObservation, 
 
 fn version_observation(response: &Value) -> Result<ObsObservation, ObsError> {
     let data = response_data(response)?;
-    let obs_version = bounded_string(data, "obsVersion")?;
-    let obs_websocket_version = bounded_string(data, "obsWebSocketVersion")?;
+    let obs_version = bounded_str(data, "obsVersion")?;
+    let obs_websocket_version = bounded_str(data, "obsWebSocketVersion")?;
+    let (obs_version_sha256, obs_version_bytes) = sensitive_string_fingerprint(obs_version);
+    let (obs_websocket_version_sha256, obs_websocket_version_bytes) =
+        sensitive_string_fingerprint(obs_websocket_version);
     let rpc_version = data
         .get("rpcVersion")
         .and_then(Value::as_u64)
         .ok_or(ObsError::ProtocolFailed)?;
     let available_request_count = available_requests(response)?.len();
     Ok(ObsObservation::Version {
-        obs_version,
-        obs_websocket_version,
+        obs_version_sha256,
+        obs_version_bytes,
+        obs_websocket_version_sha256,
+        obs_websocket_version_bytes,
         rpc_version,
         available_request_count,
     })
@@ -119,7 +129,7 @@ fn version_observation(response: &Value) -> Result<ObsObservation, ObsError> {
 
 fn scene_list_observation(response: &Value) -> Result<ObsObservation, ObsError> {
     let data = response_data(response)?;
-    let current_program_scene = bounded_string(data, "currentProgramSceneName")?;
+    let current_program_scene = bounded_str(data, "currentProgramSceneName")?;
     let raw_scenes = data
         .get("scenes")
         .and_then(Value::as_array)
@@ -128,13 +138,18 @@ fn scene_list_observation(response: &Value) -> Result<ObsObservation, ObsError> 
         return Err(ObsError::ResponseTooLarge);
     }
 
-    let mut scenes = Vec::with_capacity(raw_scenes.len());
     for raw_scene in raw_scenes {
-        scenes.push(bounded_string(raw_scene, "sceneName")?);
+        let _ = bounded_str(raw_scene, "sceneName")?;
     }
+
+    let (current_program_scene_sha256, current_program_scene_bytes) =
+        sensitive_string_fingerprint(current_program_scene);
+    let scene_list_sha256 = canonical_hash(raw_scenes).map_err(|_| ObsError::ProtocolFailed)?;
     Ok(ObsObservation::SceneList {
-        current_program_scene,
-        scenes,
+        current_program_scene_sha256,
+        current_program_scene_bytes,
+        scene_list_sha256,
+        scene_count: raw_scenes.len(),
     })
 }
 
@@ -166,7 +181,7 @@ fn response_data(response: &Value) -> Result<&Value, ObsError> {
         .ok_or(ObsError::ProtocolFailed)
 }
 
-fn bounded_string(parent: &Value, key: &str) -> Result<String, ObsError> {
+fn bounded_str<'a>(parent: &'a Value, key: &str) -> Result<&'a str, ObsError> {
     let value = parent
         .get(key)
         .and_then(Value::as_str)
@@ -174,7 +189,14 @@ fn bounded_string(parent: &Value, key: &str) -> Result<String, ObsError> {
     if value.chars().count() > MAX_OBS_STRING_CHARS {
         return Err(ObsError::ResponseTooLarge);
     }
-    Ok(value.to_owned())
+    Ok(value)
+}
+
+fn sensitive_string_fingerprint(value: &str) -> (String, usize) {
+    (
+        format!("{:x}", Sha256::digest(value.as_bytes())),
+        value.len(),
+    )
 }
 
 fn required_bool(parent: &Value, key: &str) -> Result<bool, ObsError> {
@@ -240,7 +262,8 @@ mod tests {
         }
     }
 
-    fn action(kind: &str, args: BTreeMap<String, Value>) -> Action {
+    fn action(kind: &str, mut args: BTreeMap<String, Value>) -> Action {
+        args.insert("obs_port".to_owned(), json!(4455));
         let proposal = ProposedAction {
             schema_version: PROPOSAL_SCHEMA_VERSION.to_owned(),
             kind: kind.to_owned(),
@@ -281,7 +304,7 @@ mod tests {
                 "currentProgramSceneName": "Desktop",
                 "scenes": [
                     {"sceneName": "Desktop"},
-                    {"sceneName": "Sonification"}
+                    {"sceneName": "client_secret=do-not-log"}
                 ]
             }),
         );
@@ -293,18 +316,25 @@ mod tests {
     }
 
     #[test]
-    fn scene_list_uses_typed_request_and_observation() {
+    fn scene_list_uses_hashed_audit_observation() {
         let mut transport = fake_transport();
         let action = action("obs.scene.list", BTreeMap::new());
         let evidence = execute_with_transport(&action, &mut transport);
         assert!(evidence.is_ok());
         assert_eq!(transport.calls, vec!["GetVersion", "GetSceneList"]);
         match evidence {
-            Ok(ObsEvidence {
-                observation: ObsObservation::SceneList { scenes, .. },
-                ..
-            }) => assert_eq!(scenes, vec!["Desktop", "Sonification"]),
-            Ok(_) => panic!("expected OBS scene-list evidence"),
+            Ok(evidence) => {
+                match &evidence.observation {
+                    ObsObservation::SceneList { scene_count, .. } => assert_eq!(*scene_count, 2),
+                    _ => panic!("expected OBS scene-list evidence"),
+                }
+                let serialized = match serde_json::to_string(&evidence) {
+                    Ok(value) => value,
+                    Err(error) => panic!("evidence serialization failed: {error}"),
+                };
+                assert!(!serialized.contains("Desktop"));
+                assert!(!serialized.contains("client_secret=do-not-log"));
+            }
             Err(error) => panic!("unexpected OBS error: {error}"),
         }
     }

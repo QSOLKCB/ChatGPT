@@ -142,15 +142,17 @@ impl Runtime {
                     Some("obs_request_unsupported"),
                 )
             }
-            Err(obs::ObsError::InvalidArguments | obs::ObsError::CredentialBindingMismatch) => {
-                Receipt::new_obs(
-                    action,
-                    decision,
-                    ReceiptStatus::Denied,
-                    None,
-                    Some("obs_invalid_or_unbound_action"),
-                )
-            }
+            Err(
+                obs::ObsError::InvalidArguments
+                | obs::ObsError::EndpointBindingMismatch
+                | obs::ObsError::CredentialBindingMismatch,
+            ) => Receipt::new_obs(
+                action,
+                decision,
+                ReceiptStatus::Denied,
+                None,
+                Some("obs_invalid_or_unbound_action"),
+            ),
             Err(obs::ObsError::MissingCredential) => Receipt::new_obs(
                 action,
                 decision,
@@ -174,6 +176,13 @@ impl Runtime {
                     Some("obs_connection_failed"),
                 )
             }
+            Err(obs::ObsError::DeadlineExceeded) => Receipt::new_obs(
+                action,
+                decision,
+                ReceiptStatus::Failed,
+                None,
+                Some("obs_deadline_exceeded"),
+            ),
             Err(obs::ObsError::ProtocolFailed | obs::ObsError::RequestFailed) => Receipt::new_obs(
                 action,
                 decision,
@@ -244,7 +253,7 @@ mod tests {
     #[test]
     fn live_obs_action_without_config_is_unsupported() {
         let action = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.list"}"#,
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.list","args":{"obs_port":4455}}"#,
         );
         let receipt = Runtime::effectful().run(&action, None);
         match receipt {
@@ -259,10 +268,26 @@ mod tests {
     #[test]
     fn stream_start_cannot_be_overridden_by_approval() {
         let action = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.stream.start"}"#,
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.stream.start","args":{"obs_port":4455}}"#,
         );
         let approval = Approval::allow_once(&action, "human");
         let receipt = Runtime::simulated().run(&action, Some(&approval));
         assert_eq!(receipt.ok().map(|r| r.status), Some(ReceiptStatus::Denied));
+    }
+
+    #[test]
+    fn approval_for_one_obs_port_does_not_authorize_another() {
+        let first = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.record.start","args":{"obs_port":4455}}"#,
+        );
+        let second = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.record.start","args":{"obs_port":4456}}"#,
+        );
+        let approval = Approval::allow_once(&first, "human");
+        let receipt = Runtime::simulated().run(&second, Some(&approval));
+        assert_eq!(
+            receipt.ok().map(|value| value.status),
+            Some(ReceiptStatus::ApprovalRequired)
+        );
     }
 }

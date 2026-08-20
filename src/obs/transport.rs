@@ -1,5 +1,6 @@
+use std::io::ErrorKind;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
@@ -7,13 +8,13 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tungstenite::client::client_with_config;
 use tungstenite::protocol::WebSocketConfig;
-use tungstenite::{Message, WebSocket};
+use tungstenite::{Error as WebSocketError, Message, WebSocket};
 use zeroize::Zeroizing;
 
 use super::{ObsError, MAX_OBS_MESSAGE_BYTES};
 
 const OBS_RPC_VERSION: u64 = 1;
-const OBS_IO_TIMEOUT: Duration = Duration::from_secs(3);
+const OBS_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) trait ObsTransport {
     fn request(
@@ -30,15 +31,11 @@ pub(super) struct LiveObsTransport {
 
 impl LiveObsTransport {
     pub(super) fn connect(port: u16, password: Option<&str>) -> Result<Self, ObsError> {
+        let deadline = Instant::now() + OBS_EXCHANGE_TIMEOUT;
         let address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
-        let stream = TcpStream::connect_timeout(&address, OBS_IO_TIMEOUT)
-            .map_err(|_| ObsError::ConnectionFailed)?;
-        stream
-            .set_read_timeout(Some(OBS_IO_TIMEOUT))
-            .map_err(|_| ObsError::ConnectionFailed)?;
-        stream
-            .set_write_timeout(Some(OBS_IO_TIMEOUT))
-            .map_err(|_| ObsError::ConnectionFailed)?;
+        let stream = TcpStream::connect_timeout(&address, remaining(deadline)?)
+            .map_err(|error| map_io_error(error.kind(), ObsError::ConnectionFailed))?;
+        set_stream_deadline(&stream, deadline).map_err(|_| ObsError::ConnectionFailed)?;
 
         let endpoint = format!("ws://127.0.0.1:{port}/");
         let websocket_config = WebSocketConfig::default()
@@ -49,7 +46,7 @@ impl LiveObsTransport {
         let (mut socket, _) = client_with_config(endpoint.as_str(), stream, Some(websocket_config))
             .map_err(|_| ObsError::HandshakeFailed)?;
 
-        let hello = read_json_message(&mut socket)?;
+        let hello = read_json_message(&mut socket, deadline)?;
         if hello.get("op").and_then(Value::as_u64) != Some(0) {
             return Err(ObsError::ProtocolFailed);
         }
@@ -89,11 +86,9 @@ impl LiveObsTransport {
         let identify_payload = Zeroizing::new(
             serde_json::to_string(&identify).map_err(|_| ObsError::ProtocolFailed)?,
         );
-        socket
-            .send(Message::text(identify_payload.as_str()))
-            .map_err(|_| ObsError::ProtocolFailed)?;
+        send_text(&mut socket, identify_payload.as_str(), deadline)?;
 
-        let identified = read_json_message(&mut socket)?;
+        let identified = read_json_message(&mut socket, deadline)?;
         if identified.get("op").and_then(Value::as_u64) != Some(2) {
             return Err(ObsError::ProtocolFailed);
         }
@@ -117,6 +112,7 @@ impl ObsTransport for LiveObsTransport {
         request_id: &str,
         request_data: Option<Value>,
     ) -> Result<Value, ObsError> {
+        let deadline = Instant::now() + OBS_EXCHANGE_TIMEOUT;
         let mut data = serde_json::Map::new();
         data.insert(
             "requestType".to_owned(),
@@ -131,12 +127,10 @@ impl ObsTransport for LiveObsTransport {
         }
         let payload = json!({"op": 6, "d": Value::Object(data)});
         let payload = serde_json::to_string(&payload).map_err(|_| ObsError::ProtocolFailed)?;
-        self.socket
-            .send(Message::text(payload))
-            .map_err(|_| ObsError::ProtocolFailed)?;
+        send_text(&mut self.socket, &payload, deadline)?;
 
         loop {
-            let response = read_json_message(&mut self.socket)?;
+            let response = read_json_message(&mut self.socket, deadline)?;
             match response.get("op").and_then(Value::as_u64) {
                 Some(5) => continue,
                 Some(7) => {
@@ -175,9 +169,49 @@ struct IdentifyData<'a> {
     event_subscriptions: u64,
 }
 
-fn read_json_message(socket: &mut WebSocket<TcpStream>) -> Result<Value, ObsError> {
+fn remaining(deadline: Instant) -> Result<Duration, ObsError> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|duration| !duration.is_zero())
+        .ok_or(ObsError::DeadlineExceeded)
+}
+
+fn set_stream_deadline(stream: &TcpStream, deadline: Instant) -> Result<(), ObsError> {
+    let timeout = remaining(deadline)?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|_| ObsError::ProtocolFailed)?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|_| ObsError::ProtocolFailed)?;
+    Ok(())
+}
+
+fn set_socket_deadline(
+    socket: &mut WebSocket<TcpStream>,
+    deadline: Instant,
+) -> Result<(), ObsError> {
+    set_stream_deadline(socket.get_mut(), deadline)
+}
+
+fn send_text(
+    socket: &mut WebSocket<TcpStream>,
+    payload: &str,
+    deadline: Instant,
+) -> Result<(), ObsError> {
+    set_socket_deadline(socket, deadline)?;
+    socket
+        .send(Message::text(payload))
+        .map_err(map_websocket_error)
+}
+
+fn read_json_message(
+    socket: &mut WebSocket<TcpStream>,
+    deadline: Instant,
+) -> Result<Value, ObsError> {
     loop {
-        let message = socket.read().map_err(|_| ObsError::ProtocolFailed)?;
+        set_socket_deadline(socket, deadline)?;
+        let message = socket.read().map_err(map_websocket_error)?;
         match message {
             Message::Text(text) => {
                 if text.len() > MAX_OBS_MESSAGE_BYTES {
@@ -189,6 +223,21 @@ fn read_json_message(socket: &mut WebSocket<TcpStream>) -> Result<Value, ObsErro
             Message::Close(_) => return Err(ObsError::ProtocolFailed),
             Message::Binary(_) | Message::Frame(_) => return Err(ObsError::ProtocolFailed),
         }
+    }
+}
+
+fn map_websocket_error(error: WebSocketError) -> ObsError {
+    match error {
+        WebSocketError::Io(error) => map_io_error(error.kind(), ObsError::ProtocolFailed),
+        _ => ObsError::ProtocolFailed,
+    }
+}
+
+fn map_io_error(kind: ErrorKind, fallback: ObsError) -> ObsError {
+    if matches!(kind, ErrorKind::TimedOut | ErrorKind::WouldBlock) {
+        ObsError::DeadlineExceeded
+    } else {
+        fallback
     }
 }
 
@@ -222,5 +271,13 @@ mod tests {
             response.as_str(),
             "Dj6cLS+jrNA0HpCArRg0Z/Fc+YHdt2FQfAvgD1mip6Y="
         );
+    }
+
+    #[test]
+    fn expired_exchange_deadline_fails_closed() {
+        let expired = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap_or_else(Instant::now);
+        assert!(matches!(remaining(expired), Err(ObsError::DeadlineExceeded)));
     }
 }

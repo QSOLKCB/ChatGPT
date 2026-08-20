@@ -61,12 +61,24 @@ fn obs_policy(action: &Action, effectful: bool) -> PolicyDecision {
         );
     }
 
+    let valid_port = action
+        .args()
+        .get("obs_port")
+        .and_then(Value::as_u64)
+        .is_some_and(|port| (1..=u64::from(u16::MAX)).contains(&port));
+    if !valid_port {
+        return deny(
+            "obs_endpoint_unbound",
+            "OBS actions must bind a non-zero loopback websocket port in args.obs_port",
+        );
+    }
+
     match action.kind() {
         "obs.scene.set" => {
-            if action.args().len() != 1 {
+            if action.args().len() != 2 {
                 return deny(
                     "obs_invalid_arguments",
-                    "obs.scene.set requires exactly one scene_name argument",
+                    "obs.scene.set requires exactly obs_port and scene_name arguments",
                 );
             }
             let Some(scene_name) = action.args().get("scene_name").and_then(Value::as_str) else {
@@ -93,10 +105,10 @@ fn obs_policy(action: &Action, effectful: bool) -> PolicyDecision {
         | "obs.record.start"
         | "obs.record.stop"
         | "obs.stream.stop" => {
-            if !action.args().is_empty() {
+            if action.args().len() != 1 {
                 return deny(
                     "obs_invalid_arguments",
-                    "this OBS capability does not accept arguments",
+                    "this OBS capability accepts only the bound obs_port argument",
                 );
             }
         }
@@ -112,13 +124,13 @@ fn obs_policy(action: &Action, effectful: bool) -> PolicyDecision {
         PolicyDecision {
             disposition: Disposition::ApprovalRequired,
             code: "obs_effect",
-            reason: "OBS state mutation requires exact human approval",
+            reason: "OBS state mutation requires exact human approval bound to the local endpoint",
         }
     } else {
         PolicyDecision {
             disposition: Disposition::Allow,
             code: "obs_read_only",
-            reason: "known read-only OBS capability through the loopback broker",
+            reason: "known read-only OBS capability through the bound loopback broker",
         }
     }
 }
@@ -265,10 +277,10 @@ mod tests {
     #[test]
     fn obs_reads_are_allowed_but_mutations_require_approval() {
         let read = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.list"}"#,
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.list","args":{"obs_port":4455}}"#,
         );
         let mutation = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.record.start"}"#,
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.record.start","args":{"obs_port":4455}}"#,
         );
         assert_eq!(evaluate(&read).disposition, Disposition::Allow);
         assert_eq!(
@@ -278,9 +290,18 @@ mod tests {
     }
 
     #[test]
+    fn obs_endpoint_must_be_bound_into_action() {
+        let action = action(
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.record.start"}"#,
+        );
+        assert_eq!(evaluate(&action).disposition, Disposition::Deny);
+        assert_eq!(evaluate(&action).code, "obs_endpoint_unbound");
+    }
+
+    #[test]
     fn obs_stream_start_is_explicitly_denied() {
         let action = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.stream.start"}"#,
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.stream.start","args":{"obs_port":4455}}"#,
         );
         assert_eq!(evaluate(&action).disposition, Disposition::Deny);
         assert_eq!(evaluate(&action).code, "broadcast_start_disabled");
@@ -289,7 +310,7 @@ mod tests {
     #[test]
     fn raw_obs_request_escape_is_denied() {
         let action = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.raw_request","args":{"request_type":"StartStream"}}"#,
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.raw_request","args":{"obs_port":4455,"request_type":"StartStream"}}"#,
         );
         assert_eq!(evaluate(&action).disposition, Disposition::Deny);
         assert_eq!(evaluate(&action).code, "unknown_capability");
@@ -298,7 +319,7 @@ mod tests {
     #[test]
     fn malformed_obs_scene_change_is_denied() {
         let action = action(
-            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.set","args":{"scene_name":""}}"#,
+            r#"{"schema_version":"qsol-chatgpt-proposal/1","kind":"obs.scene.set","args":{"obs_port":4455,"scene_name":""}}"#,
         );
         assert_eq!(evaluate(&action).disposition, Disposition::Deny);
         assert_eq!(evaluate(&action).code, "obs_invalid_arguments");

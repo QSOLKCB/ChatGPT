@@ -26,17 +26,22 @@ pub struct ObsEvidence {
 #[serde(tag = "observation_type", rename_all = "snake_case")]
 pub enum ObsObservation {
     Version {
-        obs_version: String,
-        obs_websocket_version: String,
+        obs_version_sha256: String,
+        obs_version_bytes: usize,
+        obs_websocket_version_sha256: String,
+        obs_websocket_version_bytes: usize,
         rpc_version: u64,
         available_request_count: usize,
     },
     SceneList {
-        current_program_scene: String,
-        scenes: Vec<String>,
+        current_program_scene_sha256: String,
+        current_program_scene_bytes: usize,
+        scene_list_sha256: String,
+        scene_count: usize,
     },
     CurrentScene {
-        scene_name: String,
+        scene_name_sha256: String,
+        scene_name_bytes: usize,
     },
     RecordStatus {
         active: bool,
